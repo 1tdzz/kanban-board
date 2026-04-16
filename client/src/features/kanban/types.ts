@@ -3,6 +3,10 @@ export type Board = {
   title: string;
 };
 
+export type BoardsPayload = {
+  boards: Board[];
+};
+
 export type Column = {
   id: number;
   boardId: number;
@@ -24,4 +28,3 @@ export type BoardPayload = {
   columns: Column[];
   cards: Card[];
 };
-

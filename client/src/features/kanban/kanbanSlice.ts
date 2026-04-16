@@ -1,24 +1,30 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import type { Board, BoardPayload, Card, Column } from "./types";
+import type { Board, BoardPayload, BoardsPayload, Card, Column } from "./types";
 import { login, logout, register } from "../auth/authSlice";
 
 type KanbanState = {
+  boards: Board[];
   board: Board | null;
   columnsById: Record<number, Column>;
   columnIds: number[];
   cardsById: Record<number, Card>;
   cardIdsByColumnId: Record<number, number[]>;
-  loading: boolean;
+  boardsLoading: boolean;
+  boardLoading: boolean;
+  mutationLoading: boolean;
   error: string | null;
 };
 
 const initialState: KanbanState = {
+  boards: [],
   board: null,
   columnsById: {},
   columnIds: [],
   cardsById: {},
   cardIdsByColumnId: {},
-  loading: false,
+  boardsLoading: false,
+  boardLoading: false,
+  mutationLoading: false,
   error: null,
 };
 
@@ -28,6 +34,19 @@ function authHeader(getState: () => unknown): HeadersInit {
   const token = (getState() as Rootish).auth.token;
   if (!token) return { "Content-Type": "application/json" };
   return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+}
+
+async function readJson<T>(r: Response): Promise<T> {
+  return (await r.json()) as T;
+}
+
+async function readError(r: Response, fallback: string) {
+  try {
+    const data = (await r.json()) as { error?: string };
+    return data.error ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function normalize(payload: BoardPayload) {
@@ -55,56 +74,150 @@ function normalize(payload: BoardPayload) {
   return { columnsById, columnIds, cardsById, cardIdsByColumnId };
 }
 
-export const fetchBoard = createAsyncThunk("kanban/fetchBoard", async (_, { getState, rejectWithValue }) => {
+function clearBoardState(state: KanbanState) {
+  state.board = null;
+  state.columnsById = {};
+  state.columnIds = [];
+  state.cardsById = {};
+  state.cardIdsByColumnId = {};
+}
+
+export const fetchBoards = createAsyncThunk("kanban/fetchBoards", async (_, { getState, rejectWithValue }) => {
   const token = (getState() as Rootish).auth.token;
   if (!token) return rejectWithValue("not_authenticated");
 
-  const r = await fetch("/api/board", { headers: { Authorization: `Bearer ${token}` } });
+  const r = await fetch("/api/boards", { headers: { Authorization: `Bearer ${token}` } });
   if (r.status === 401) return rejectWithValue("unauthorized");
-  if (!r.ok) return rejectWithValue(`http_${r.status}`);
-  return (await r.json()) as BoardPayload;
+  if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+  return (await readJson<BoardsPayload>(r)).boards;
 });
 
-export const addColumn = createAsyncThunk("kanban/addColumn", async (title: string, { getState }) => {
-  const r = await fetch("/api/columns", {
-    method: "POST",
-    headers: authHeader(getState),
-    body: JSON.stringify({ title }),
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (await r.json()) as Column;
-});
-
-export const deleteColumn = createAsyncThunk("kanban/deleteColumn", async (columnId: number, { getState }) => {
-  const r = await fetch(`/api/columns/${columnId}`, {
-    method: "DELETE",
-    headers: authHeader(getState),
-  });
-  if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-  return columnId;
-});
-
-export const addCard = createAsyncThunk(
-  "kanban/addCard",
-  async (args: { columnId: number; title: string }, { getState }) => {
-    const r = await fetch("/api/cards", {
+export const createBoard = createAsyncThunk(
+  "kanban/createBoard",
+  async (title: string, { getState, rejectWithValue }) => {
+    const r = await fetch("/api/boards", {
       method: "POST",
       headers: authHeader(getState),
-      body: JSON.stringify(args),
+      body: JSON.stringify({ title }),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return (await r.json()) as Card;
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Board>(r);
   },
 );
 
-export const deleteCard = createAsyncThunk("kanban/deleteCard", async (cardId: number, { getState }) => {
-  const r = await fetch(`/api/cards/${cardId}`, {
-    method: "DELETE",
-    headers: authHeader(getState),
-  });
-  if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
-  return cardId;
-});
+export const renameBoard = createAsyncThunk(
+  "kanban/renameBoard",
+  async (args: { boardId: number; title: string }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/boards/${args.boardId}`, {
+      method: "PATCH",
+      headers: authHeader(getState),
+      body: JSON.stringify({ title: args.title }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Board>(r);
+  },
+);
+
+export const deleteBoard = createAsyncThunk(
+  "kanban/deleteBoard",
+  async (boardId: number, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/boards/${boardId}`, {
+      method: "DELETE",
+      headers: authHeader(getState),
+    });
+    if (!r.ok && r.status !== 204) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return boardId;
+  },
+);
+
+export const fetchBoard = createAsyncThunk(
+  "kanban/fetchBoard",
+  async (boardId: number, { getState, rejectWithValue }) => {
+    const token = (getState() as Rootish).auth.token;
+    if (!token) return rejectWithValue("not_authenticated");
+
+    const r = await fetch(`/api/boards/${boardId}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (r.status === 401) return rejectWithValue("unauthorized");
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<BoardPayload>(r);
+  },
+);
+
+export const addColumn = createAsyncThunk(
+  "kanban/addColumn",
+  async (args: { boardId: number; title: string }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/boards/${args.boardId}/columns`, {
+      method: "POST",
+      headers: authHeader(getState),
+      body: JSON.stringify({ title: args.title }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Column>(r);
+  },
+);
+
+export const renameColumn = createAsyncThunk(
+  "kanban/renameColumn",
+  async (args: { columnId: number; title: string }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/columns/${args.columnId}`, {
+      method: "PATCH",
+      headers: authHeader(getState),
+      body: JSON.stringify({ title: args.title }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Column>(r);
+  },
+);
+
+export const deleteColumn = createAsyncThunk(
+  "kanban/deleteColumn",
+  async (columnId: number, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/columns/${columnId}`, {
+      method: "DELETE",
+      headers: authHeader(getState),
+    });
+    if (!r.ok && r.status !== 204) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return columnId;
+  },
+);
+
+export const addCard = createAsyncThunk(
+  "kanban/addCard",
+  async (args: { columnId: number; title: string }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/columns/${args.columnId}/cards`, {
+      method: "POST",
+      headers: authHeader(getState),
+      body: JSON.stringify({ title: args.title }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Card>(r);
+  },
+);
+
+export const renameCard = createAsyncThunk(
+  "kanban/renameCard",
+  async (args: { cardId: number; title: string }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/cards/${args.cardId}`, {
+      method: "PATCH",
+      headers: authHeader(getState),
+      body: JSON.stringify({ title: args.title }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<Card>(r);
+  },
+);
+
+export const deleteCard = createAsyncThunk(
+  "kanban/deleteCard",
+  async (cardId: number, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/cards/${cardId}`, {
+      method: "DELETE",
+      headers: authHeader(getState),
+    });
+    if (!r.ok && r.status !== 204) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return cardId;
+  },
+);
 
 const kanbanSlice = createSlice({
   name: "kanban",
@@ -112,13 +225,70 @@ const kanbanSlice = createSlice({
   reducers: {},
   extraReducers: (builder) => {
     builder
+      .addCase(fetchBoards.pending, (s) => {
+        s.boardsLoading = true;
+        s.error = null;
+      })
+      .addCase(fetchBoards.fulfilled, (s, a) => {
+        s.boardsLoading = false;
+        s.boards = a.payload;
+      })
+      .addCase(fetchBoards.rejected, (s, a) => {
+        s.boardsLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка загрузки досок");
+      })
+      .addCase(createBoard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(createBoard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        s.boards.push(a.payload);
+      })
+      .addCase(createBoard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка создания доски");
+      })
+      .addCase(renameBoard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(renameBoard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        const board = s.boards.find((item) => item.id === a.payload.id);
+        if (board) board.title = a.payload.title;
+        if (s.board?.id === a.payload.id) s.board.title = a.payload.title;
+      })
+      .addCase(renameBoard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка переименования доски");
+      })
+      .addCase(deleteBoard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(deleteBoard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        s.boards = s.boards.filter((board) => board.id !== a.payload);
+        if (s.board?.id === a.payload) clearBoardState(s);
+      })
+      .addCase(deleteBoard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка удаления доски");
+      })
       .addCase(fetchBoard.pending, (s) => {
-        s.loading = true;
+        s.boardLoading = true;
         s.error = null;
       })
       .addCase(fetchBoard.fulfilled, (s, a) => {
-        s.loading = false;
+        s.boardLoading = false;
         s.board = a.payload.board;
+        const existing = s.boards.find((item) => item.id === a.payload.board.id);
+        if (existing) {
+          existing.title = a.payload.board.title;
+        } else {
+          s.boards.push(a.payload.board);
+        }
         const n = normalize(a.payload);
         s.columnsById = n.columnsById;
         s.columnIds = n.columnIds;
@@ -126,19 +296,43 @@ const kanbanSlice = createSlice({
         s.cardIdsByColumnId = n.cardIdsByColumnId;
       })
       .addCase(fetchBoard.rejected, (s, a) => {
-        s.loading = false;
-        s.error =
-          typeof a.payload === "string"
-            ? a.payload
-            : (a.error.message ?? "Ошибка загрузки");
+        s.boardLoading = false;
+        clearBoardState(s);
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка загрузки доски");
+      })
+      .addCase(addColumn.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
       })
       .addCase(addColumn.fulfilled, (s, a) => {
+        s.mutationLoading = false;
         const col = a.payload;
         s.columnsById[col.id] = col;
         s.columnIds.push(col.id);
         s.cardIdsByColumnId[col.id] = [];
       })
+      .addCase(addColumn.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка создания колонки");
+      })
+      .addCase(renameColumn.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(renameColumn.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        if (s.columnsById[a.payload.id]) s.columnsById[a.payload.id] = a.payload;
+      })
+      .addCase(renameColumn.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка переименования колонки");
+      })
+      .addCase(deleteColumn.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
       .addCase(deleteColumn.fulfilled, (s, a) => {
+        s.mutationLoading = false;
         const colId = a.payload;
         delete s.columnsById[colId];
         s.columnIds = s.columnIds.filter((id) => id !== colId);
@@ -147,13 +341,43 @@ const kanbanSlice = createSlice({
         for (const cardId of cardIds) delete s.cardsById[cardId];
         delete s.cardIdsByColumnId[colId];
       })
+      .addCase(deleteColumn.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка удаления колонки");
+      })
+      .addCase(addCard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
       .addCase(addCard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
         const card = a.payload;
         s.cardsById[card.id] = card;
         if (!s.cardIdsByColumnId[card.columnId]) s.cardIdsByColumnId[card.columnId] = [];
         s.cardIdsByColumnId[card.columnId].push(card.id);
       })
+      .addCase(addCard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка создания карточки");
+      })
+      .addCase(renameCard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(renameCard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        if (s.cardsById[a.payload.id]) s.cardsById[a.payload.id] = a.payload;
+      })
+      .addCase(renameCard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка переименования карточки");
+      })
+      .addCase(deleteCard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
       .addCase(deleteCard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
         const cardId = a.payload;
         const card = s.cardsById[cardId];
         if (card) {
@@ -162,6 +386,10 @@ const kanbanSlice = createSlice({
           );
         }
         delete s.cardsById[cardId];
+      })
+      .addCase(deleteCard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка удаления карточки");
       })
       .addCase(logout, () => ({ ...initialState }))
       .addCase(login.fulfilled, () => ({ ...initialState }))

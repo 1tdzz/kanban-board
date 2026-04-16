@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (token) return <Navigate to="/" replace />;
+  if (token) return <Navigate to="/boards" replace />;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -26,7 +26,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       const res = await dispatch(login(username.trim())).unwrap();
-      if (res.token) navigate("/", { replace: true });
+      if (res.token) navigate("/boards", { replace: true });
     } catch (err) {
       const code = typeof err === "string" ? err : "login_failed";
       setError(ERR[code] ?? code);

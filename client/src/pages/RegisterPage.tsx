@@ -24,7 +24,7 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (token) return <Navigate to="/" replace />;
+  if (token) return <Navigate to="/boards" replace />;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -38,7 +38,7 @@ export default function RegisterPage() {
           extraInfo: extraInfo.trim(),
         }),
       ).unwrap();
-      navigate("/", { replace: true });
+      navigate("/boards", { replace: true });
     } catch (err) {
       const code = typeof err === "string" ? err : "register_failed";
       setError(ERR[code] ?? code);

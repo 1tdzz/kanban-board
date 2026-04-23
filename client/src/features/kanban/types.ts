@@ -23,6 +23,11 @@ export type Card = {
   position: number;
 };
 
+export type CardImage = {
+  id: number;
+  mime: string;
+};
+
 export type BoardPayload = {
   board: Board;
   columns: Column[];

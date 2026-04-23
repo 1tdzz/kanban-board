@@ -25,15 +25,55 @@ import {
   addColumn,
   deleteBoard,
   deleteCard,
+  deleteCardImage,
   deleteColumn,
   fetchBoard,
+  fetchCardImages,
   moveCard,
   renameBoard,
   renameColumn,
   reorderColumns,
   updateCard,
+  uploadCardImage,
 } from "../features/kanban/kanbanSlice";
-import type { Card, Column } from "../features/kanban/types";
+import type { Card, CardImage, Column } from "../features/kanban/types";
+
+function useImageUrl(imageId: number) {
+  const token = useAppSelector((s) => s.auth.token);
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    fetch(`/api/card-images/${imageId}/data`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => r.blob())
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => {});
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [imageId, token]);
+
+  return url;
+}
+
+function CardImageThumb({ image, onDelete, mutationLoading }: { image: CardImage; onDelete?: () => void; mutationLoading?: boolean }) {
+  const url = useImageUrl(image.id);
+  return (
+    <div className="card-image-item">
+      {url ? <img src={url} alt="" className="card-image-thumb" /> : <div className="card-image-thumb card-image-loading" />}
+      {onDelete && (
+        <button type="button" onClick={onDelete} disabled={mutationLoading}>
+          Удалить
+        </button>
+      )}
+    </div>
+  );
+}
 
 type DragData =
   | { type: "column"; columnId: number }
@@ -45,7 +85,7 @@ export default function BoardPage() {
   const params = useParams();
   const boardId = Number(params.boardId);
   const user = useAppSelector((s) => s.auth.user);
-  const { board, boardLoading, mutationLoading, error, columnIds, columnsById, cardsById, cardIdsByColumnId } =
+  const { board, boardLoading, mutationLoading, error, columnIds, columnsById, cardsById, cardIdsByColumnId, imagesByCardId } =
     useAppSelector((s) => s.kanban);
 
   const [newColumnTitle, setNewColumnTitle] = useState("");
@@ -165,6 +205,7 @@ export default function BoardPage() {
       description: card.description,
       dueDate: card.dueDate ?? "",
     });
+    void dispatch(fetchCardImages(card.id));
   }
 
   async function submitCardEdit(e?: FormEvent) {
@@ -472,6 +513,9 @@ export default function BoardPage() {
                     }}
                     onDeleteCard={(cardId) => void dispatch(deleteCard(cardId))}
                     onHandleEditorKeyDown={handleEditorKeyDown}
+                    imagesByCardId={imagesByCardId}
+                    onUploadImage={(cardId, file) => void dispatch(uploadCardImage({ cardId, file }))}
+                    onDeleteImage={(cardId, imageId) => void dispatch(deleteCardImage({ cardId, imageId }))}
                   />
                 );
               })}
@@ -522,6 +566,9 @@ type SortableColumnProps = {
     submit: () => Promise<void> | void,
     cancel: () => void,
   ) => void;
+  imagesByCardId: Record<number, CardImage[]>;
+  onUploadImage: (cardId: number, file: File) => void;
+  onDeleteImage: (cardId: number, imageId: number) => void;
 };
 
 function SortableColumn(props: SortableColumnProps) {
@@ -579,11 +626,14 @@ function SortableColumn(props: SortableColumnProps) {
                 isEditing={props.editingCardId === card.id}
                 cardDraft={props.cardDraft}
                 mutationLoading={props.mutationLoading}
+                images={props.imagesByCardId[card.id] ?? []}
                 onStartEditing={() => props.onStartCardEditing(card)}
                 onCardDraftChange={props.onCardDraftChange}
                 onSubmit={() => props.onSubmitCardEdit()}
                 onCancel={props.onCancelCardEdit}
                 onDelete={() => props.onDeleteCard(card.id)}
+                onUploadImage={(file) => props.onUploadImage(card.id, file)}
+                onDeleteImage={(imageId) => props.onDeleteImage(card.id, imageId)}
               />
             );
           })}
@@ -610,17 +660,29 @@ type SortableCardProps = {
   isEditing: boolean;
   cardDraft: { title: string; description: string; dueDate: string };
   mutationLoading: boolean;
+  images: CardImage[];
   onStartEditing: () => void;
   onCardDraftChange: (value: { title: string; description: string; dueDate: string }) => void;
   onSubmit: () => void;
   onCancel: () => void;
   onDelete: () => void;
+  onUploadImage: (file: File) => void;
+  onDeleteImage: (imageId: number) => void;
 };
 
 function SortableCard(props: SortableCardProps) {
+  const dispatch = useAppDispatch();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `card-${props.card.id}-${props.columnId}`,
   });
+
+  // Fetch images on mount so they show in view mode without opening editor
+  useEffect(() => {
+    if (props.images.length === 0) {
+      void dispatch(fetchCardImages(props.card.id));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.card.id]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -660,6 +722,30 @@ function SortableCard(props: SortableCardProps) {
             value={props.cardDraft.dueDate}
             onChange={(e) => props.onCardDraftChange({ ...props.cardDraft, dueDate: e.target.value })}
           />
+          <div className="card-images">
+            {props.images.map((img) => (
+              <CardImageThumb
+                key={img.id}
+                image={img}
+                onDelete={() => props.onDeleteImage(img.id)}
+                mutationLoading={props.mutationLoading}
+              />
+            ))}
+          </div>
+          <label className="card-image-upload">
+            Добавить картинку
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                files.forEach((f) => props.onUploadImage(f));
+                e.target.value = "";
+              }}
+            />
+          </label>
           <div className="field-row-inline">
             <button type="submit" disabled={props.mutationLoading || !props.cardDraft.title.trim()}>
               Сохранить
@@ -673,6 +759,13 @@ function SortableCard(props: SortableCardProps) {
         <div className="field-row">
           <div>{props.card.description || "Без описания"}</div>
           <div className="card-meta">Срок: {props.card.dueDate || "не указан"}</div>
+          {props.images.length > 0 && (
+            <div className="card-images">
+              {props.images.map((img) => (
+                <CardImageThumb key={img.id} image={img} />
+              ))}
+            </div>
+          )}
           <div className="field-row-inline">
             <button onClick={props.onStartEditing}>Редактировать</button>
             <button onClick={props.onDelete} disabled={props.mutationLoading}>

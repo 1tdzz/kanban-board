@@ -1,5 +1,5 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import type { Board, BoardPayload, BoardsPayload, Card, Column } from "./types";
+import type { Board, BoardPayload, BoardsPayload, Card, CardImage, Column } from "./types";
 import { login, logout, register } from "../auth/authSlice";
 
 type KanbanState = {
@@ -9,6 +9,7 @@ type KanbanState = {
   columnIds: number[];
   cardsById: Record<number, Card>;
   cardIdsByColumnId: Record<number, number[]>;
+  imagesByCardId: Record<number, CardImage[]>;
   boardsLoading: boolean;
   boardLoading: boolean;
   mutationLoading: boolean;
@@ -22,6 +23,7 @@ const initialState: KanbanState = {
   columnIds: [],
   cardsById: {},
   cardIdsByColumnId: {},
+  imagesByCardId: {},
   boardsLoading: false,
   boardLoading: false,
   mutationLoading: false,
@@ -266,6 +268,45 @@ export const deleteCard = createAsyncThunk(
   },
 );
 
+export const fetchCardImages = createAsyncThunk(
+  "kanban/fetchCardImages",
+  async (cardId: number, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/cards/${cardId}/images`, { headers: authHeader(getState) });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    const data = (await r.json()) as { images: CardImage[] };
+    return { cardId, images: data.images };
+  },
+);
+
+export const uploadCardImage = createAsyncThunk(
+  "kanban/uploadCardImage",
+  async (args: { cardId: number; file: File }, { getState, rejectWithValue }) => {
+    const token = (getState() as Rootish).auth.token;
+    const headers: HeadersInit = { "Content-Type": args.file.type };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const r = await fetch(`/api/cards/${args.cardId}/images`, {
+      method: "POST",
+      headers,
+      body: args.file,
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    const image = (await r.json()) as CardImage;
+    return { cardId: args.cardId, image };
+  },
+);
+
+export const deleteCardImage = createAsyncThunk(
+  "kanban/deleteCardImage",
+  async (args: { cardId: number; imageId: number }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/card-images/${args.imageId}`, {
+      method: "DELETE",
+      headers: authHeader(getState),
+    });
+    if (!r.ok && r.status !== 204) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return args;
+  },
+);
+
 const kanbanSlice = createSlice({
   name: "kanban",
   initialState,
@@ -446,10 +487,25 @@ const kanbanSlice = createSlice({
           );
         }
         delete s.cardsById[cardId];
+        delete s.imagesByCardId[cardId];
       })
       .addCase(deleteCard.rejected, (s, a) => {
         s.mutationLoading = false;
         s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка удаления карточки");
+      })
+      .addCase(fetchCardImages.fulfilled, (s, a) => {
+        s.imagesByCardId[a.payload.cardId] = a.payload.images;
+      })
+      .addCase(uploadCardImage.fulfilled, (s, a) => {
+        const { cardId, image } = a.payload;
+        if (!s.imagesByCardId[cardId]) s.imagesByCardId[cardId] = [];
+        s.imagesByCardId[cardId].push(image);
+      })
+      .addCase(deleteCardImage.fulfilled, (s, a) => {
+        const { cardId, imageId } = a.payload;
+        if (s.imagesByCardId[cardId]) {
+          s.imagesByCardId[cardId] = s.imagesByCardId[cardId].filter((img) => img.id !== imageId);
+        }
       })
       .addCase(logout, () => ({ ...initialState }))
       .addCase(login.fulfilled, () => ({ ...initialState }))

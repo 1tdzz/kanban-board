@@ -133,6 +133,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "2mb" }));
+app.use(express.raw({ type: "image/*", limit: "10mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -428,6 +429,85 @@ app.delete("/cards/:id", authMiddleware, (req: AuthedRequest, res) => {
   if (!card) return res.status(404).json({ error: "card_not_found" });
 
   db.prepare("DELETE FROM cards WHERE id = ?").run(cardId);
+  res.status(204).send();
+});
+
+app.get("/cards/:id/images", authMiddleware, (req: AuthedRequest, res) => {
+  const cardId = Number(req.params.id);
+  if (!Number.isFinite(cardId)) return res.status(400).json({ error: "invalid_id" });
+
+  const card = getCardForUser(cardId, req.userId!);
+  if (!card) return res.status(404).json({ error: "card_not_found" });
+
+  const images = db
+    .prepare("SELECT id, mime FROM card_images WHERE card_id = ? ORDER BY id ASC")
+    .all(cardId) as Array<{ id: number; mime: string }>;
+  res.json({ images });
+});
+
+app.post("/cards/:id/images", authMiddleware, (req: AuthedRequest, res) => {
+  const cardId = Number(req.params.id);
+  if (!Number.isFinite(cardId)) return res.status(400).json({ error: "invalid_id" });
+
+  const card = getCardForUser(cardId, req.userId!);
+  if (!card) return res.status(404).json({ error: "card_not_found" });
+
+  const mime = String(req.headers["content-type"] ?? "").split(";")[0].trim();
+  if (!mime.startsWith("image/")) return res.status(400).json({ error: "invalid_mime" });
+
+  const data = req.body as Buffer;
+  if (!Buffer.isBuffer(data) || data.length === 0) return res.status(400).json({ error: "empty_body" });
+
+  const ext = mime.split("/")[1] ?? "bin";
+  const filename = `${Date.now()}.${ext}`;
+
+  const info = db
+    .prepare("INSERT INTO card_images (card_id, filename, mime, data) VALUES (?, ?, ?, ?)")
+    .run(cardId, filename, mime, data);
+
+  res.status(201).json({ id: Number(info.lastInsertRowid), mime });
+});
+
+app.get("/card-images/:imageId/data", authMiddleware, (req: AuthedRequest, res) => {
+  const imageId = Number(req.params.imageId);
+  if (!Number.isFinite(imageId)) return res.status(400).json({ error: "invalid_id" });
+
+  const row = db
+    .prepare(
+      `SELECT ci.mime, ci.data
+       FROM card_images ci
+       INNER JOIN cards c ON c.id = ci.card_id
+       INNER JOIN columns col ON col.id = c.column_id
+       INNER JOIN boards b ON b.id = col.board_id
+       WHERE ci.id = ? AND b.user_id = ?`,
+    )
+    .get(imageId, req.userId!) as { mime: string; data: Buffer } | undefined;
+
+  if (!row) return res.status(404).json({ error: "image_not_found" });
+
+  res.setHeader("Content-Type", row.mime);
+  res.setHeader("Cache-Control", "private, max-age=31536000");
+  res.send(row.data);
+});
+
+app.delete("/card-images/:imageId", authMiddleware, (req: AuthedRequest, res) => {
+  const imageId = Number(req.params.imageId);
+  if (!Number.isFinite(imageId)) return res.status(400).json({ error: "invalid_id" });
+
+  const row = db
+    .prepare(
+      `SELECT ci.id
+       FROM card_images ci
+       INNER JOIN cards c ON c.id = ci.card_id
+       INNER JOIN columns col ON col.id = c.column_id
+       INNER JOIN boards b ON b.id = col.board_id
+       WHERE ci.id = ? AND b.user_id = ?`,
+    )
+    .get(imageId, req.userId!) as { id: number } | undefined;
+
+  if (!row) return res.status(404).json({ error: "image_not_found" });
+
+  db.prepare("DELETE FROM card_images WHERE id = ?").run(imageId);
   res.status(204).send();
 });
 

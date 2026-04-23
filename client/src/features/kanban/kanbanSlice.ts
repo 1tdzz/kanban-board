@@ -82,6 +82,21 @@ function clearBoardState(state: KanbanState) {
   state.cardIdsByColumnId = {};
 }
 
+function applyBoardPayload(state: KanbanState, payload: BoardPayload) {
+  state.board = payload.board;
+  const existing = state.boards.find((item) => item.id === payload.board.id);
+  if (existing) {
+    existing.title = payload.board.title;
+  } else {
+    state.boards.push(payload.board);
+  }
+  const n = normalize(payload);
+  state.columnsById = n.columnsById;
+  state.columnIds = n.columnIds;
+  state.cardsById = n.cardsById;
+  state.cardIdsByColumnId = n.cardIdsByColumnId;
+}
+
 export const fetchBoards = createAsyncThunk("kanban/fetchBoards", async (_, { getState, rejectWithValue }) => {
   const token = (getState() as Rootish).auth.token;
   if (!token) return rejectWithValue("not_authenticated");
@@ -143,6 +158,19 @@ export const fetchBoard = createAsyncThunk(
   },
 );
 
+export const reorderColumns = createAsyncThunk(
+  "kanban/reorderColumns",
+  async (args: { boardId: number; columnIds: number[] }, { getState, rejectWithValue }) => {
+    const r = await fetch(`/api/boards/${args.boardId}/columns/reorder`, {
+      method: "PATCH",
+      headers: authHeader(getState),
+      body: JSON.stringify({ columnIds: args.columnIds }),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<BoardPayload>(r);
+  },
+);
+
 export const addColumn = createAsyncThunk(
   "kanban/addColumn",
   async (args: { boardId: number; title: string }, { getState, rejectWithValue }) => {
@@ -181,6 +209,22 @@ export const deleteColumn = createAsyncThunk(
   },
 );
 
+export const moveCard = createAsyncThunk(
+  "kanban/moveCard",
+  async (
+    args: { boardId: number; cardId: number; fromColumnId: number; toColumnId: number; toIndex: number },
+    { getState, rejectWithValue },
+  ) => {
+    const r = await fetch(`/api/boards/${args.boardId}/cards/move`, {
+      method: "PATCH",
+      headers: authHeader(getState),
+      body: JSON.stringify(args),
+    });
+    if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
+    return await readJson<BoardPayload>(r);
+  },
+);
+
 export const addCard = createAsyncThunk(
   "kanban/addCard",
   async (args: { columnId: number; title: string }, { getState, rejectWithValue }) => {
@@ -194,13 +238,16 @@ export const addCard = createAsyncThunk(
   },
 );
 
-export const renameCard = createAsyncThunk(
-  "kanban/renameCard",
-  async (args: { cardId: number; title: string }, { getState, rejectWithValue }) => {
+export const updateCard = createAsyncThunk(
+  "kanban/updateCard",
+  async (
+    args: { cardId: number; title?: string; description?: string; dueDate?: string | null },
+    { getState, rejectWithValue },
+  ) => {
     const r = await fetch(`/api/cards/${args.cardId}`, {
       method: "PATCH",
       headers: authHeader(getState),
-      body: JSON.stringify({ title: args.title }),
+      body: JSON.stringify(args),
     });
     if (!r.ok) return rejectWithValue(await readError(r, `http_${r.status}`));
     return await readJson<Card>(r);
@@ -282,23 +329,24 @@ const kanbanSlice = createSlice({
       })
       .addCase(fetchBoard.fulfilled, (s, a) => {
         s.boardLoading = false;
-        s.board = a.payload.board;
-        const existing = s.boards.find((item) => item.id === a.payload.board.id);
-        if (existing) {
-          existing.title = a.payload.board.title;
-        } else {
-          s.boards.push(a.payload.board);
-        }
-        const n = normalize(a.payload);
-        s.columnsById = n.columnsById;
-        s.columnIds = n.columnIds;
-        s.cardsById = n.cardsById;
-        s.cardIdsByColumnId = n.cardIdsByColumnId;
+        applyBoardPayload(s, a.payload);
       })
       .addCase(fetchBoard.rejected, (s, a) => {
         s.boardLoading = false;
         clearBoardState(s);
         s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка загрузки доски");
+      })
+      .addCase(reorderColumns.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(reorderColumns.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        applyBoardPayload(s, a.payload);
+      })
+      .addCase(reorderColumns.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка изменения порядка колонок");
       })
       .addCase(addColumn.pending, (s) => {
         s.mutationLoading = true;
@@ -345,6 +393,18 @@ const kanbanSlice = createSlice({
         s.mutationLoading = false;
         s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка удаления колонки");
       })
+      .addCase(moveCard.pending, (s) => {
+        s.mutationLoading = true;
+        s.error = null;
+      })
+      .addCase(moveCard.fulfilled, (s, a) => {
+        s.mutationLoading = false;
+        applyBoardPayload(s, a.payload);
+      })
+      .addCase(moveCard.rejected, (s, a) => {
+        s.mutationLoading = false;
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка перемещения карточки");
+      })
       .addCase(addCard.pending, (s) => {
         s.mutationLoading = true;
         s.error = null;
@@ -360,17 +420,17 @@ const kanbanSlice = createSlice({
         s.mutationLoading = false;
         s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка создания карточки");
       })
-      .addCase(renameCard.pending, (s) => {
+      .addCase(updateCard.pending, (s) => {
         s.mutationLoading = true;
         s.error = null;
       })
-      .addCase(renameCard.fulfilled, (s, a) => {
+      .addCase(updateCard.fulfilled, (s, a) => {
         s.mutationLoading = false;
         if (s.cardsById[a.payload.id]) s.cardsById[a.payload.id] = a.payload;
       })
-      .addCase(renameCard.rejected, (s, a) => {
+      .addCase(updateCard.rejected, (s, a) => {
         s.mutationLoading = false;
-        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка переименования карточки");
+        s.error = typeof a.payload === "string" ? a.payload : (a.error.message ?? "Ошибка обновления карточки");
       })
       .addCase(deleteCard.pending, (s) => {
         s.mutationLoading = true;

@@ -113,6 +113,13 @@ function getBoardPayload(boardId: number, userId: number) {
   return { board, columns, cards };
 }
 
+function normalizeDueDate(value: unknown) {
+  if (value == null || value === "") return null;
+  const dueDate = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return undefined;
+  return dueDate;
+}
+
 const app = express();
 
 app.use(
@@ -233,6 +240,33 @@ app.delete("/boards/:id", authMiddleware, (req: AuthedRequest, res) => {
   res.status(204).send();
 });
 
+app.patch("/boards/:boardId/columns/reorder", authMiddleware, (req: AuthedRequest, res) => {
+  const boardId = Number(req.params.boardId);
+  const columnIds = Array.isArray(req.body?.columnIds) ? req.body.columnIds.map(Number) : null;
+  if (!Number.isFinite(boardId)) return res.status(400).json({ error: "invalid_boardId" });
+  if (!columnIds || columnIds.some((id: number) => !Number.isFinite(id))) return res.status(400).json({ error: "invalid_columnIds" });
+
+  const board = getBoardForUser(boardId, req.userId!);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  const currentColumns = db
+    .prepare("SELECT id FROM columns WHERE board_id = ? ORDER BY position ASC, id ASC")
+    .all(boardId) as Array<{ id: number }>;
+  const currentIds = currentColumns.map((col) => col.id);
+
+  if (currentIds.length !== columnIds.length) return res.status(400).json({ error: "column_mismatch" });
+  if (currentIds.some((id) => !columnIds.includes(id))) return res.status(400).json({ error: "column_mismatch" });
+
+  const updatePositions = db.transaction((ids: number[]) => {
+    const stmt = db.prepare("UPDATE columns SET position = ? WHERE id = ? AND board_id = ?");
+    ids.forEach((id, index) => stmt.run(index, id, boardId));
+  });
+  updatePositions(columnIds);
+
+  const payload = getBoardPayload(boardId, req.userId!);
+  res.json(payload);
+});
+
 app.post("/boards/:boardId/columns", authMiddleware, (req: AuthedRequest, res) => {
   const boardId = Number(req.params.boardId);
   const title = String(req.body?.title ?? "").trim();
@@ -275,6 +309,62 @@ app.delete("/columns/:id", authMiddleware, (req: AuthedRequest, res) => {
   res.status(204).send();
 });
 
+app.patch("/boards/:boardId/cards/move", authMiddleware, (req: AuthedRequest, res) => {
+  const boardId = Number(req.params.boardId);
+  const cardId = Number(req.body?.cardId);
+  const fromColumnId = Number(req.body?.fromColumnId);
+  const toColumnId = Number(req.body?.toColumnId);
+  const toIndex = Number(req.body?.toIndex);
+
+  if (!Number.isFinite(boardId)) return res.status(400).json({ error: "invalid_boardId" });
+  if (!Number.isFinite(cardId)) return res.status(400).json({ error: "invalid_cardId" });
+  if (!Number.isFinite(fromColumnId) || !Number.isFinite(toColumnId)) return res.status(400).json({ error: "invalid_columnId" });
+  if (!Number.isFinite(toIndex) || toIndex < 0) return res.status(400).json({ error: "invalid_toIndex" });
+
+  const board = getBoardForUser(boardId, req.userId!);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  const fromColumn = getColumnForUser(fromColumnId, req.userId!);
+  const toColumn = getColumnForUser(toColumnId, req.userId!);
+  const card = getCardForUser(cardId, req.userId!);
+
+  if (!fromColumn || fromColumn.boardId !== boardId) return res.status(404).json({ error: "column_not_found" });
+  if (!toColumn || toColumn.boardId !== boardId) return res.status(404).json({ error: "column_not_found" });
+  if (!card || card.columnId !== fromColumnId) return res.status(404).json({ error: "card_not_found" });
+
+  const moveCardInTransaction = db.transaction(() => {
+    const sourceCards = db
+      .prepare("SELECT id FROM cards WHERE column_id = ? AND id != ? ORDER BY position ASC, id ASC")
+      .all(fromColumnId, cardId) as Array<{ id: number }>;
+    const destinationCards = (
+      fromColumnId === toColumnId
+        ? db
+            .prepare("SELECT id FROM cards WHERE column_id = ? AND id != ? ORDER BY position ASC, id ASC")
+            .all(toColumnId, cardId)
+        : db
+            .prepare("SELECT id FROM cards WHERE column_id = ? ORDER BY position ASC, id ASC")
+            .all(toColumnId)
+    ) as Array<{ id: number }>;
+
+    const targetCards = fromColumnId === toColumnId ? sourceCards.slice() : destinationCards.slice();
+    const boundedIndex = Math.min(toIndex, targetCards.length);
+    targetCards.splice(boundedIndex, 0, { id: cardId });
+
+    db.prepare("UPDATE cards SET column_id = ? WHERE id = ?").run(toColumnId, cardId);
+
+    const updateStmt = db.prepare("UPDATE cards SET position = ? WHERE id = ?");
+    sourceCards.forEach((item, index) => {
+      if (fromColumnId !== toColumnId) updateStmt.run(index, item.id);
+    });
+    targetCards.forEach((item, index) => updateStmt.run(index, item.id));
+  });
+
+  moveCardInTransaction();
+
+  const payload = getBoardPayload(boardId, req.userId!);
+  res.json(payload);
+});
+
 app.post("/columns/:columnId/cards", authMiddleware, (req: AuthedRequest, res) => {
   const columnId = Number(req.params.columnId);
   const title = String(req.body?.title ?? "").trim();
@@ -303,15 +393,31 @@ app.post("/columns/:columnId/cards", authMiddleware, (req: AuthedRequest, res) =
 
 app.patch("/cards/:id", authMiddleware, (req: AuthedRequest, res) => {
   const cardId = Number(req.params.id);
-  const title = String(req.body?.title ?? "").trim();
   if (!Number.isFinite(cardId)) return res.status(400).json({ error: "invalid_id" });
-  if (!title) return res.status(400).json({ error: "title_required" });
 
   const card = getCardForUser(cardId, req.userId!);
   if (!card) return res.status(404).json({ error: "card_not_found" });
 
-  db.prepare("UPDATE cards SET title = ? WHERE id = ?").run(title, cardId);
-  res.json({ ...card, title });
+  const nextTitle = req.body?.title === undefined ? card.title : String(req.body.title).trim();
+  const nextDescription = req.body?.description === undefined ? card.description : String(req.body.description);
+  const nextDueDate = req.body?.dueDate === undefined ? card.dueDate : normalizeDueDate(req.body.dueDate);
+
+  if (!nextTitle) return res.status(400).json({ error: "title_required" });
+  if (nextDueDate === undefined) return res.status(400).json({ error: "invalid_dueDate" });
+
+  db.prepare("UPDATE cards SET title = ?, description = ?, due_date = ? WHERE id = ?").run(
+    nextTitle,
+    nextDescription,
+    nextDueDate,
+    cardId,
+  );
+
+  res.json({
+    ...card,
+    title: nextTitle,
+    description: nextDescription,
+    dueDate: nextDueDate,
+  });
 });
 
 app.delete("/cards/:id", authMiddleware, (req: AuthedRequest, res) => {

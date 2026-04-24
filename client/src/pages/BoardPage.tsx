@@ -65,7 +65,13 @@ function CardImageThumb({ image, onDelete, mutationLoading }: { image: CardImage
   const url = useImageUrl(image.id);
   return (
     <div className="card-image-item">
-      {url ? <img src={url} alt="" className="card-image-thumb" /> : <div className="card-image-thumb card-image-loading" />}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer">
+          <img src={url} alt="" className="card-image-thumb" />
+        </a>
+      ) : (
+        <div className="card-image-thumb card-image-loading" />
+      )}
       {onDelete && (
         <button type="button" onClick={onDelete} disabled={mutationLoading}>
           Удалить

@@ -42,7 +42,6 @@ export default function BoardsPage() {
       setEditingTitle("");
       return;
     }
-
     try {
       await dispatch(renameBoard({ boardId: editingBoardId, title })).unwrap();
     } finally {
@@ -52,14 +51,8 @@ export default function BoardsPage() {
   }
 
   function handleRenameKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      void submitRename();
-    }
-    if (e.key === "Escape") {
-      setEditingBoardId(null);
-      setEditingTitle("");
-    }
+    if (e.key === "Enter") { e.preventDefault(); void submitRename(); }
+    if (e.key === "Escape") { setEditingBoardId(null); setEditingTitle(""); }
   }
 
   async function handleDeleteBoard(boardId: number) {
@@ -77,42 +70,49 @@ export default function BoardsPage() {
 
   return (
     <div>
-      <header>
-        <div>
-          <h1>Доски</h1>
-          <div>
-            {user?.username}
-            {user?.email ? ` · ${user.email}` : ""}
-          </div>
+      <header className="app-bar">
+        <div className="app-bar-left">
+          <span className="app-bar-title">Kanban</span>
+          <span className="app-bar-user">
+            {user?.username}{user?.email ? ` · ${user.email}` : ""}
+          </span>
         </div>
-
-        <button onClick={onLogout}>Выйти</button>
+        <div className="app-bar-right">
+          <button className="btn-secondary btn-sm" onClick={onLogout}>Выйти</button>
+        </div>
       </header>
 
-      {error && <div>Ошибка: {error}</div>}
+      <div className="boards-page">
+        {error && <div className="error-msg">Ошибка: {error}</div>}
 
-      <section>
-        <h2>Новая доска</h2>
-        <input
-          value={newBoardTitle}
-          onChange={(e) => setNewBoardTitle(e.target.value)}
-          placeholder="Название доски"
-        />
-        <button onClick={() => void handleCreateBoard()} disabled={mutationLoading || !newBoardTitle.trim()}>
-          Создать доску
-        </button>
-      </section>
+        <div className="boards-create">
+          <input
+            value={newBoardTitle}
+            onChange={(e) => setNewBoardTitle(e.target.value)}
+            placeholder="Название новой доски"
+            onKeyDown={(e) => { if (e.key === "Enter") void handleCreateBoard(); }}
+          />
+          <button
+            className="btn-primary btn-sm"
+            onClick={() => void handleCreateBoard()}
+            disabled={mutationLoading || !newBoardTitle.trim()}
+          >
+            Создать
+          </button>
+        </div>
 
-      <section>
-        <h2>Список досок</h2>
-        {boardsLoading && <div>Загрузка...</div>}
-        {!boardsLoading && boards.length === 0 && <div>У вас пока нет досок</div>}
+        <h2>Мои доски</h2>
 
-        <ul>
+        {boardsLoading && <div className="loading-msg">Загрузка…</div>}
+        {!boardsLoading && boards.length === 0 && (
+          <div className="boards-empty">Досок пока нет — создайте первую</div>
+        )}
+
+        <ul className="boards-list">
           {boards.map((board) => (
-            <li key={board.id}>
+            <li key={board.id} className="board-item">
               {editingBoardId === board.id ? (
-                <>
+                <div className="board-item-rename">
                   <input
                     autoFocus
                     value={editingTitle}
@@ -120,23 +120,30 @@ export default function BoardsPage() {
                     onBlur={() => void submitRename()}
                     onKeyDown={handleRenameKeyDown}
                   />
-                  <button onClick={() => void submitRename()} disabled={mutationLoading || !editingTitle.trim()}>
+                  <button className="btn-primary btn-sm" onClick={() => void submitRename()} disabled={mutationLoading || !editingTitle.trim()}>
                     Сохранить
                   </button>
-                </>
+                  <button className="btn-secondary btn-sm" onClick={() => { setEditingBoardId(null); setEditingTitle(""); }}>
+                    Отмена
+                  </button>
+                </div>
               ) : (
                 <>
-                  <Link to={`/boards/${board.id}`}>{board.title}</Link>
-                  <button onClick={() => startEditing(board.id, board.title)}>Переименовать</button>
+                  <Link className="board-item-link" to={`/boards/${board.id}`}>{board.title}</Link>
+                  <div className="board-item-actions">
+                    <button className="btn-ghost btn-sm" onClick={() => startEditing(board.id, board.title)}>
+                      Переименовать
+                    </button>
+                    <button className="btn-danger btn-sm" onClick={() => void handleDeleteBoard(board.id)} disabled={mutationLoading}>
+                      Удалить
+                    </button>
+                  </div>
                 </>
               )}
-              <button onClick={() => void handleDeleteBoard(board.id)} disabled={mutationLoading}>
-                Удалить
-              </button>
             </li>
           ))}
         </ul>
-      </section>
+      </div>
     </div>
   );
 }

@@ -48,53 +48,55 @@ export default function RegisterPage() {
   }
 
   return (
-    <div>
-      <h1>Регистрация</h1>
-      <p>Имя, почта и дополнительная информация о себе</p>
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>Регистрация</h1>
+        <p className="auth-subtitle">Имя, почта и дополнительная информация о себе</p>
 
-      <form onSubmit={onSubmit}>
-        <label>
-          Имя пользователя
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-          />
-        </label>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label>
+            Имя пользователя
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoFocus
+              required
+            />
+          </label>
 
-        <label>
-          Электронная почта
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="email"
-            required
-          />
-        </label>
+          <label>
+            Электронная почта
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              required
+            />
+          </label>
 
-        <label>
-          Дополнительная информация
-          <textarea
-            value={extraInfo}
-            onChange={(e) => setExtraInfo(e.target.value)}
-            placeholder="Например: группа, предпочтения по задачам…"
-          />
-        </label>
+          <label>
+            Дополнительная информация
+            <textarea
+              value={extraInfo}
+              onChange={(e) => setExtraInfo(e.target.value)}
+              placeholder="Например: группа, предпочтения по задачам…"
+              rows={3}
+            />
+          </label>
 
-        {error && <div>{error}</div>}
+          {error && <div className="auth-error">{error}</div>}
 
-        <div>
-          <button type="submit" disabled={busy}>
+          <button type="submit" className="btn-primary" disabled={busy}>
             {busy ? "Регистрация…" : "Создать аккаунт"}
           </button>
-        </div>
-      </form>
+        </form>
 
-      <p>
-        Уже есть аккаунт? <Link to="/login">Войти</Link>
-      </p>
+        <p className="auth-footer">
+          Уже есть аккаунт? <Link to="/login">Войти</Link>
+        </p>
+      </div>
     </div>
   );
 }

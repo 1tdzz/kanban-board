@@ -36,33 +36,34 @@ export default function LoginPage() {
   }
 
   return (
-    <div>
-      <h1>Вход</h1>
-      <p>Вход по имени пользователя</p>
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>Вход</h1>
+        <p className="auth-subtitle">Введите имя пользователя, чтобы войти</p>
 
-      <form onSubmit={onSubmit}>
-        <label>
-          Имя пользователя
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-          />
-        </label>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label>
+            Имя пользователя
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoFocus
+              required
+            />
+          </label>
 
-        {error && <div>{error}</div>}
+          {error && <div className="auth-error">{error}</div>}
 
-        <div>
-          <button type="submit" disabled={busy}>
+          <button type="submit" className="btn-primary" disabled={busy}>
             {busy ? "Вход…" : "Войти"}
           </button>
-        </div>
-      </form>
+        </form>
 
-      <p>
-        Нет аккаунта? <Link to="/register">Регистрация</Link>
-      </p>
+        <p className="auth-footer">
+          Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
+        </p>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
-  closestCorners,
+  closestCenter,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -77,6 +77,28 @@ function CardImageThumb({ image, onDelete, mutationLoading }: { image: CardImage
           Удалить
         </button>
       )}
+    </div>
+  );
+}
+
+function CardImages({ images, isDragging, isAnyDragging, onDelete, mutationLoading }: {
+  images: CardImage[];
+  isDragging?: boolean;
+  isAnyDragging?: boolean;
+  onDelete?: (id: number) => void;
+  mutationLoading?: boolean;
+}) {
+  if (isDragging || images.length === 0) return null;
+  return (
+    <div className="card-images" style={isAnyDragging ? { pointerEvents: "none" } : undefined}>
+      {images.map((img) => (
+        <CardImageThumb
+          key={img.id}
+          image={img}
+          onDelete={onDelete ? () => onDelete(img.id) : undefined}
+          mutationLoading={mutationLoading}
+        />
+      ))}
     </div>
   );
 }
@@ -264,11 +286,22 @@ export default function BoardPage() {
 
   function getDragData(id: string): DragData | null {
     if (id.startsWith("card-")) {
-      const parts = id.split("-");
-      const cardId = Number(parts[1]);
-      const columnId = Number(parts[2]);
-      if (Number.isFinite(cardId) && Number.isFinite(columnId)) {
-        return { type: "card", cardId, columnId };
+      const cardId = Number(id.replace("card-", ""));
+      if (Number.isFinite(cardId)) {
+        // Find which column the card currently belongs to in local state
+        const columnId = Number(
+          Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
+        );
+        if (Number.isFinite(columnId)) {
+          return { type: "card", cardId, columnId };
+        }
+        // Fallback: search Redux state
+        const reduxColumnId = Number(
+          Object.entries(cardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
+        );
+        if (Number.isFinite(reduxColumnId)) {
+          return { type: "card", cardId, columnId: reduxColumnId };
+        }
       }
     }
     if (id.startsWith("column-")) {
@@ -283,45 +316,54 @@ export default function BoardPage() {
     const overId = event.over ? String(event.over.id) : null;
     if (!overId) return;
 
-    const activeData = getDragData(activeId);
-    if (activeData?.type !== "card") return;
+    if (!activeId.startsWith("card-")) return;
+    const cardId = Number(activeId.replace("card-", ""));
+    if (!Number.isFinite(cardId)) return;
 
-    const overData = getDragData(overId);
-    if (!overData) return;
+    // Find current column of the dragged card
+    const fromColumnId = Number(
+      Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
+    );
+    if (!Number.isFinite(fromColumnId)) return;
 
-    const cardId = activeData.cardId;
-    const toColumnId = overData.columnId;
+    // Determine target column and position
+    let toColumnId: number;
+    let overCardId: number | null = null;
 
-    // Find which column currently holds the card in local state
-    const fromColumnId = Object.entries(localCardIdsByColumnId).find(([, ids]) =>
-      ids.includes(cardId)
-    )?.[0];
-    if (!fromColumnId) return;
-    const fromColId = Number(fromColumnId);
-
-    if (fromColId === toColumnId) {
-      // Reorder within same column
-      const ids = localCardIdsByColumnId[fromColId] ?? [];
-      const oldIndex = ids.indexOf(cardId);
-      const newIndex = overData.type === "card" ? ids.indexOf(overData.cardId) : ids.length;
-      if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
-      setLocalCardIdsByColumnId((prev) => ({
-        ...prev,
-        [fromColId]: arrayMove(ids, oldIndex, newIndex),
-      }));
+    if (overId.startsWith("card-")) {
+      overCardId = Number(overId.replace("card-", ""));
+      const col = Number(
+        Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(overCardId!))?.[0]
+      );
+      if (!Number.isFinite(col)) return;
+      toColumnId = col;
+    } else if (overId.startsWith("column-")) {
+      toColumnId = Number(overId.replace("column-", ""));
+      if (!Number.isFinite(toColumnId)) return;
     } else {
-      // Move card to different column
-      const fromIds = (localCardIdsByColumnId[fromColId] ?? []).filter((id) => id !== cardId);
-      const toIds = [...(localCardIdsByColumnId[toColumnId] ?? [])];
-      const insertAt = overData.type === "card" ? toIds.indexOf(overData.cardId) : toIds.length;
-      const safeInsert = insertAt === -1 ? toIds.length : insertAt;
-      toIds.splice(safeInsert, 0, cardId);
-      setLocalCardIdsByColumnId((prev) => ({
-        ...prev,
-        [fromColId]: fromIds,
-        [toColumnId]: toIds,
-      }));
+      return;
     }
+
+    setLocalCardIdsByColumnId((prev) => {
+      const fromIds = [...(prev[fromColumnId] ?? [])];
+      const toIds = fromColumnId === toColumnId ? fromIds : [...(prev[toColumnId] ?? [])];
+
+      const oldIndex = fromIds.indexOf(cardId);
+      if (oldIndex === -1) return prev;
+
+      if (fromColumnId === toColumnId) {
+        const newIndex = overCardId !== null ? fromIds.indexOf(overCardId) : fromIds.length - 1;
+        if (newIndex === -1 || oldIndex === newIndex) return prev;
+        return { ...prev, [fromColumnId]: arrayMove(fromIds, oldIndex, newIndex) };
+      } else {
+        const withoutCard = fromIds.filter((id) => id !== cardId);
+        const insertAt = overCardId !== null ? toIds.indexOf(overCardId) : toIds.length;
+        const safeInsert = insertAt === -1 ? toIds.length : insertAt;
+        const newToIds = [...toIds];
+        newToIds.splice(safeInsert, 0, cardId);
+        return { ...prev, [fromColumnId]: withoutCard, [toColumnId]: newToIds };
+      }
+    });
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -368,7 +410,8 @@ export default function BoardPage() {
       const fromColumnId = origColumnId;
       if (fromColumnId === null) return;
 
-      // Find where the card ended up in local state
+      // Итоговое положение карточки уже правильно лежит в localCardIdsByColumnId —
+      // onDragOver обновлял его на каждый шаг
       const toColumnId = Number(
         Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
       );
@@ -377,7 +420,7 @@ export default function BoardPage() {
       const toIndex = (localCardIdsByColumnId[toColumnId] ?? []).indexOf(cardId);
       if (toIndex === -1) return;
 
-      // If dropped back in same column at same position, no-op
+      // Если карточка вернулась на исходное место — ничего не делаем
       const origIds = cardIdsByColumnId[fromColumnId] ?? [];
       if (toColumnId === fromColumnId && origIds.indexOf(cardId) === toIndex) return;
 
@@ -391,83 +434,77 @@ export default function BoardPage() {
     activeDrag?.type === "column" && columnsById[activeDrag.columnId] ? columnsById[activeDrag.columnId] : null;
 
   return (
-    <div className="page">
-      <header className="board-header">
-        <div>
-          <div>
-            <Link to="/boards">К списку досок</Link>
-          </div>
-          <div>
-            {user?.username}
-            {user?.email ? ` · ${user.email}` : ""}
-          </div>
+    <div className="board-page">
+      <header className="app-bar">
+        <div className="app-bar-left">
+          <Link className="back-link" to="/boards">← Доски</Link>
           {editingBoard ? (
-            <div className="field-row-inline">
+            <div className="board-title-edit">
               <input
                 autoFocus
                 value={boardTitle}
                 onChange={(e) => setBoardTitle(e.target.value)}
                 onBlur={() => void submitBoardRename()}
                 onKeyDown={(e) =>
-                  handleEditorKeyDown(
-                    e,
-                    submitBoardRename,
-                    () => {
-                      setEditingBoard(false);
-                      setBoardTitle(board?.title ?? "");
-                    },
-                  )
+                  handleEditorKeyDown(e, submitBoardRename, () => {
+                    setEditingBoard(false);
+                    setBoardTitle(board?.title ?? "");
+                  })
                 }
               />
-              <button onClick={() => void submitBoardRename()} disabled={mutationLoading || !boardTitle.trim()}>
+              <button className="btn-primary btn-sm" onClick={() => void submitBoardRename()} disabled={mutationLoading || !boardTitle.trim()}>
                 Сохранить
               </button>
             </div>
           ) : (
-            <div>
-              <h1>{board?.title ?? "…"}</h1>
-              {board && <button onClick={() => setEditingBoard(true)}>Переименовать доску</button>}
-            </div>
+            <>
+              <span className="app-bar-title">{board?.title ?? "…"}</span>
+              {board && (
+                <button className="btn-ghost btn-sm" onClick={() => setEditingBoard(true)}>
+                  Переименовать
+                </button>
+              )}
+            </>
           )}
         </div>
-
-        <div className="field-row-inline">
-          <button onClick={handleDeleteBoard} disabled={!board || mutationLoading}>
+        <div className="app-bar-right">
+          <span className="app-bar-user">
+            {user?.username}{user?.email ? ` · ${user.email}` : ""}
+          </span>
+          <button className="btn-danger btn-sm" onClick={handleDeleteBoard} disabled={!board || mutationLoading}>
             Удалить доску
           </button>
-          <button onClick={onLogout}>Выйти</button>
+          <button className="btn-secondary btn-sm" onClick={onLogout}>Выйти</button>
         </div>
       </header>
 
-      <main>
-        {boardLoading && !board && <div>Загрузка...</div>}
-        {error && error !== "board_not_found" && <div>Ошибка: {error}</div>}
-
-        {board && (
-          <section className="inline-form">
-            <h2>Новая колонка</h2>
-            <div className="field-row-inline">
-              <input
-                value={newColumnTitle}
-                onChange={(e) => setNewColumnTitle(e.target.value)}
-                placeholder="Название колонки"
-              />
-              <button onClick={() => void handleCreateColumn()} disabled={mutationLoading || !newColumnTitle.trim()}>
-                Добавить колонку
-              </button>
-            </div>
-          </section>
-        )}
+      <div className="board-content">
+        {boardLoading && !board && <div className="loading-msg">Загрузка…</div>}
+        {error && error !== "board_not_found" && <div className="error-msg">{error}</div>}
 
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={closestCenter}
           onDragStart={(event) => {
-            const data = getDragData(String(event.active.id));
-            setActiveDrag(data);
-            if (data?.type === "card") setOriginalCardColumnId(data.columnId);
+            const activeId = String(event.active.id);
+            // Sync local state first so getDragData can look up columnId
             setLocalColumnIds(columnIds);
             setLocalCardIdsByColumnId(cardIdsByColumnId);
+            let data: DragData | null = null;
+            if (activeId.startsWith("card-")) {
+              const cardId = Number(activeId.replace("card-", ""));
+              const columnId = Number(
+                Object.entries(cardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
+              );
+              if (Number.isFinite(cardId) && Number.isFinite(columnId)) {
+                data = { type: "card", cardId, columnId };
+              }
+            } else if (activeId.startsWith("column-")) {
+              const columnId = Number(activeId.replace("column-", ""));
+              if (Number.isFinite(columnId)) data = { type: "column", columnId };
+            }
+            setActiveDrag(data);
+            if (data?.type === "card") setOriginalCardColumnId(data.columnId);
           }}
           onDragOver={(event) => void handleDragOver(event)}
           onDragEnd={(event) => void handleDragEnd(event)}
@@ -495,6 +532,7 @@ export default function BoardPage() {
                     editingCardId={editingCardId}
                     cardDraft={cardDraft}
                     activeDragCardId={activeDrag?.type === "card" ? activeDrag.cardId : null}
+                    isAnyDragging={activeDrag !== null}
                     onColumnTitleChange={setColumnTitle}
                     onStartColumnRename={startColumnRename}
                     onSubmitColumnRename={() => void submitColumnRename()}
@@ -504,10 +542,7 @@ export default function BoardPage() {
                     }}
                     onDeleteColumn={() => void dispatch(deleteColumn(col.id))}
                     onNewCardTitleChange={(value) =>
-                      setNewCardTitles((current) => ({
-                        ...current,
-                        [col.id]: value,
-                      }))
+                      setNewCardTitles((current) => ({ ...current, [col.id]: value }))
                     }
                     onCreateCard={() => void handleCreateCard(col.id)}
                     onStartCardEditing={startCardEditing}
@@ -525,22 +560,36 @@ export default function BoardPage() {
                   />
                 );
               })}
+
+              {board && (
+                <div className="add-column-form">
+                  <input
+                    value={newColumnTitle}
+                    onChange={(e) => setNewColumnTitle(e.target.value)}
+                    placeholder="Новая колонка…"
+                    onKeyDown={(e) => { if (e.key === "Enter") void handleCreateColumn(); }}
+                  />
+                  <button className="btn-primary btn-sm" onClick={() => void handleCreateColumn()} disabled={mutationLoading || !newColumnTitle.trim()}>
+                    +
+                  </button>
+                </div>
+              )}
             </div>
           </SortableContext>
 
           <DragOverlay>
             {activeCard ? (
               <div className="card dragging">
-                <strong>{activeCard.title}</strong>
+                <span className="card-title">{activeCard.title}</span>
               </div>
             ) : activeColumn ? (
               <div className="column dragging">
-                <strong>{activeColumn.title}</strong>
+                <span className="column-title">{activeColumn.title}</span>
               </div>
             ) : null}
           </DragOverlay>
         </DndContext>
-      </main>
+      </div>
     </div>
   );
 }
@@ -555,6 +604,7 @@ type SortableColumnProps = {
   editingCardId: number | null;
   cardDraft: { title: string; description: string; dueDate: string };
   activeDragCardId: number | null;
+  isAnyDragging: boolean;
   onColumnTitleChange: (value: string) => void;
   onStartColumnRename: (columnId: number, title: string) => void;
   onSubmitColumnRename: () => void;
@@ -590,7 +640,7 @@ function SortableColumn(props: SortableColumnProps) {
   return (
     <section ref={setNodeRef} style={style} className={`column${isDragging ? " dragging" : ""}`}>
       {props.isEditingColumn ? (
-        <div className="field-row-inline">
+        <div className="column-rename-form">
           <input
             autoFocus
             value={props.columnTitle}
@@ -598,62 +648,61 @@ function SortableColumn(props: SortableColumnProps) {
             onBlur={props.onSubmitColumnRename}
             onKeyDown={(e) => props.onHandleEditorKeyDown(e, props.onSubmitColumnRename, props.onCancelColumnRename)}
           />
-          <button onClick={props.onSubmitColumnRename} disabled={props.mutationLoading || !props.columnTitle.trim()}>
+          <button className="btn-primary btn-sm" onClick={props.onSubmitColumnRename} disabled={props.mutationLoading || !props.columnTitle.trim()}>
             Сохранить
+          </button>
+          <button className="btn-secondary btn-sm" type="button" onClick={props.onCancelColumnRename}>
+            Отмена
           </button>
         </div>
       ) : (
         <div className="column-header">
-          <div className="field-row-inline">
-            <button className="drag-handle" type="button" {...attributes} {...listeners}>
-              ⇅
-            </button>
-            <strong>{props.column.title}</strong>
-          </div>
-          <div className="field-row-inline">
-            <button onClick={() => props.onStartColumnRename(props.column.id, props.column.title)}>Переименовать</button>
-            <button onClick={props.onDeleteColumn} disabled={props.mutationLoading}>
-              Удалить
-            </button>
+          <button className="drag-handle" type="button" {...attributes} {...listeners}>
+            ⠿
+          </button>
+          <span className="column-title">{props.column.title}</span>
+          <div className="column-header-actions">
+            <button className="btn-ghost btn-sm" onClick={() => props.onStartColumnRename(props.column.id, props.column.title)}>✎</button>
+            <button className="btn-danger btn-sm" onClick={props.onDeleteColumn} disabled={props.mutationLoading}>✕</button>
           </div>
         </div>
       )}
 
-      <div id={`column-drop-${props.column.id}`} className="card-list">
-        <SortableContext items={props.cards.map((card) => `card-${card.id}-${props.column.id}`)} strategy={verticalListSortingStrategy}>
-          {props.cards.length === 0 && <div>Перетащите сюда карточку</div>}
-          {props.cards.map((card) => {
-            if (props.activeDragCardId === card.id) return null;
-            return (
-              <SortableCard
-                key={card.id}
-                card={card}
-                columnId={props.column.id}
-                isEditing={props.editingCardId === card.id}
-                cardDraft={props.cardDraft}
-                mutationLoading={props.mutationLoading}
-                images={props.imagesByCardId[card.id] ?? []}
-                onStartEditing={() => props.onStartCardEditing(card)}
-                onCardDraftChange={props.onCardDraftChange}
-                onSubmit={() => props.onSubmitCardEdit()}
-                onCancel={props.onCancelCardEdit}
-                onDelete={() => props.onDeleteCard(card.id)}
-                onUploadImage={(file) => props.onUploadImage(card.id, file)}
-                onDeleteImage={(imageId) => props.onDeleteImage(card.id, imageId)}
-              />
-            );
-          })}
+      <div className="card-list">
+        <SortableContext items={props.cards.map((card) => `card-${card.id}`)} strategy={verticalListSortingStrategy}>
+          {props.cards.length === 0 && <div className="card-list-empty">Нет карточек</div>}
+          {props.cards.map((card) => (
+            <SortableCard
+              key={card.id}
+              card={card}
+              columnId={props.column.id}
+              isEditing={props.editingCardId === card.id}
+              cardDraft={props.cardDraft}
+              mutationLoading={props.mutationLoading}
+              images={props.imagesByCardId[card.id] ?? []}
+              isDragPlaceholder={props.activeDragCardId === card.id}
+              isAnyDragging={props.isAnyDragging}
+              onStartEditing={() => props.onStartCardEditing(card)}
+              onCardDraftChange={props.onCardDraftChange}
+              onSubmit={() => props.onSubmitCardEdit()}
+              onCancel={props.onCancelCardEdit}
+              onDelete={() => props.onDeleteCard(card.id)}
+              onUploadImage={(file) => props.onUploadImage(card.id, file)}
+              onDeleteImage={(imageId) => props.onDeleteImage(card.id, imageId)}
+            />
+          ))}
         </SortableContext>
       </div>
 
-      <div className="inline-form">
+      <div className="add-card-form">
         <input
           value={props.newCardTitle}
           onChange={(e) => props.onNewCardTitleChange(e.target.value)}
-          placeholder="Название карточки"
+          placeholder="Новая карточка…"
+          onKeyDown={(e) => { if (e.key === "Enter") props.onCreateCard(); }}
         />
-        <button onClick={props.onCreateCard} disabled={props.mutationLoading || !props.newCardTitle.trim()}>
-          Добавить карточку
+        <button className="btn-primary btn-sm" onClick={props.onCreateCard} disabled={props.mutationLoading || !props.newCardTitle.trim()}>
+          +
         </button>
       </div>
     </section>
@@ -674,34 +723,47 @@ type SortableCardProps = {
   onDelete: () => void;
   onUploadImage: (file: File) => void;
   onDeleteImage: (imageId: number) => void;
+  isDragPlaceholder?: boolean;
+  isAnyDragging?: boolean;
 };
 
 function SortableCard(props: SortableCardProps) {
   const dispatch = useAppDispatch();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: `card-${props.card.id}-${props.columnId}`,
+    id: `card-${props.card.id}`,
+    data: { columnId: props.columnId },
   });
 
   // Fetch images on mount so they show in view mode without opening editor
+  const hasFetchedImages = useRef(false);
+
   useEffect(() => {
-    if (props.images.length === 0) {
+    if (!hasFetchedImages.current) {
+      hasFetchedImages.current = true;
       void dispatch(fetchCardImages(props.card.id));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.card.id]);
+  }, [props.card.id, dispatch]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
+    opacity: props.isDragPlaceholder ? 0 : undefined,
+    pointerEvents: props.isDragPlaceholder ? ("none" as const) : undefined,
   };
 
   return (
-    <div ref={setNodeRef} style={style} className={`card${isDragging ? " dragging" : ""}`}>
-      <div className="field-row-inline">
+    <div ref={setNodeRef} style={style} className={`card${isDragging ? " dragging" : ""}${props.isDragPlaceholder ? " drag-placeholder" : ""}`}>
+      <div className="card-top">
         <button className="drag-handle" type="button" {...attributes} {...listeners}>
-          ↕
+          ⠿
         </button>
-        <strong>{props.card.title}</strong>
+        <span className="card-title">{props.card.title}</span>
+        {!props.isEditing && (
+          <div className="card-actions">
+            <button className="btn-ghost btn-sm" onClick={props.onStartEditing}>✎</button>
+            <button className="btn-danger btn-sm" onClick={props.onDelete} disabled={props.mutationLoading}>✕</button>
+          </div>
+        )}
       </div>
 
       {props.isEditing ? (
@@ -721,25 +783,16 @@ function SortableCard(props: SortableCardProps) {
             value={props.cardDraft.description}
             onChange={(e) => props.onCardDraftChange({ ...props.cardDraft, description: e.target.value })}
             placeholder="Описание"
-            rows={4}
+            rows={3}
           />
           <input
             type="date"
             value={props.cardDraft.dueDate}
             onChange={(e) => props.onCardDraftChange({ ...props.cardDraft, dueDate: e.target.value })}
           />
-          <div className="card-images">
-            {props.images.map((img) => (
-              <CardImageThumb
-                key={img.id}
-                image={img}
-                onDelete={() => props.onDeleteImage(img.id)}
-                mutationLoading={props.mutationLoading}
-              />
-            ))}
-          </div>
+          <CardImages images={props.images} isDragging={props.isDragPlaceholder} isAnyDragging={props.isAnyDragging} onDelete={props.onDeleteImage} mutationLoading={props.mutationLoading} />
           <label className="card-image-upload">
-            Добавить картинку
+            + Добавить картинку
             <input
               type="file"
               accept="image/*"
@@ -752,33 +805,25 @@ function SortableCard(props: SortableCardProps) {
               }}
             />
           </label>
-          <div className="field-row-inline">
-            <button type="submit" disabled={props.mutationLoading || !props.cardDraft.title.trim()}>
+          <div className="row">
+            <button className="btn-primary btn-sm" type="submit" disabled={props.mutationLoading || !props.cardDraft.title.trim()}>
               Сохранить
             </button>
-            <button type="button" onClick={props.onCancel}>
+            <button className="btn-secondary btn-sm" type="button" onClick={props.onCancel}>
               Отмена
             </button>
           </div>
         </form>
       ) : (
-        <div className="field-row">
-          <div>{props.card.description || "Без описания"}</div>
-          <div className="card-meta">Срок: {props.card.dueDate || "не указан"}</div>
-          {props.images.length > 0 && (
-            <div className="card-images">
-              {props.images.map((img) => (
-                <CardImageThumb key={img.id} image={img} />
-              ))}
-            </div>
+        <>
+          {props.card.description && (
+            <div className="card-desc">{props.card.description}</div>
           )}
-          <div className="field-row-inline">
-            <button onClick={props.onStartEditing}>Редактировать</button>
-            <button onClick={props.onDelete} disabled={props.mutationLoading}>
-              Удалить
-            </button>
-          </div>
-        </div>
+          {props.card.dueDate && (
+            <div className="card-meta">до {props.card.dueDate}</div>
+          )}
+          <CardImages images={props.images} isDragging={props.isDragPlaceholder} isAnyDragging={props.isAnyDragging} />
+        </>
       )}
     </div>
   );

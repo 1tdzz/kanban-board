@@ -438,6 +438,23 @@ button:disabled { opacity: .5; cursor: default; }
   opacity: .6;
 }
 
+/* Unified placeholder shown both during same-column and cross-column drag */
+.card-drop-placeholder {
+  height: 38px;
+  border: 2px dashed var(--teal);
+  border-radius: var(--radius);
+  background: var(--teal-light);
+  margin-bottom: 6px;
+  opacity: .7;
+  transition: height 120ms ease;
+}
+
+/* The original card becomes invisible (occupies space) while dragging */
+.card.drag-placeholder {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .card-top {
   display: flex;
   align-items: flex-start;

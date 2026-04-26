@@ -7,3 +7,4 @@ dist/
 *.local
 CLAUDE.md
 .claude/
+server/data/

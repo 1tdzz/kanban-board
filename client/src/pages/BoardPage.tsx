@@ -67,7 +67,7 @@ function CardImageThumb({ image, onDelete, mutationLoading }: { image: CardImage
     <div className="card-image-item">
       {url ? (
         <a href={url} target="_blank" rel="noreferrer">
-          <img src={url} alt="" className="card-image-thumb" />
+          <img src={url} alt="" className="card-image-thumb" draggable={false} />
         </a>
       ) : (
         <div className="card-image-thumb card-image-loading" />
@@ -88,7 +88,7 @@ function CardImages({ images, isDragging, isAnyDragging, onDelete, mutationLoadi
   onDelete?: (id: number) => void;
   mutationLoading?: boolean;
 }) {
-  if (isDragging || images.length === 0) return null;
+  if (isDragging || isAnyDragging || images.length === 0) return null;
   return (
     <div className="card-images" style={isAnyDragging ? { pointerEvents: "none" } : undefined}>
       {images.map((img) => (
@@ -145,12 +145,12 @@ export default function BoardPage() {
   }, [board]);
 
   // Keep local drag state in sync with Redux when not dragging
-  useEffect(() => {
-    if (!activeDrag) {
-      setLocalColumnIds(columnIds);
-      setLocalCardIdsByColumnId(cardIdsByColumnId);
-    }
-  }, [activeDrag, columnIds, cardIdsByColumnId]);
+  // useEffect(() => {
+  //   if (!activeDrag) {
+  //     setLocalColumnIds(columnIds);
+  //     setLocalCardIdsByColumnId(cardIdsByColumnId);
+  //   }
+  // }, [activeDrag, columnIds, cardIdsByColumnId]);
 
   useEffect(() => {
     if (error === "unauthorized") {
@@ -433,6 +433,9 @@ export default function BoardPage() {
   const activeColumn =
     activeDrag?.type === "column" && columnsById[activeDrag.columnId] ? columnsById[activeDrag.columnId] : null;
 
+  const displayColumnIds = activeDrag ? localColumnIds : columnIds;
+  const displayCardIdsByColumnId = activeDrag ? localCardIdsByColumnId : cardIdsByColumnId;
+
   return (
     <div className="board-page">
       <header className="app-bar">
@@ -515,16 +518,16 @@ export default function BoardPage() {
             setLocalCardIdsByColumnId(cardIdsByColumnId);
           }}
         >
-          <SortableContext items={localColumnIds.map((id) => `column-${id}`)} strategy={horizontalListSortingStrategy}>
+          <SortableContext items={displayColumnIds.map((id) => `column-${id}`)} strategy={horizontalListSortingStrategy}>
             <div className="columns-row">
-              {localColumnIds.map((colId) => {
+              {displayColumnIds.map((colId) => {
                 const col = columnsById[colId];
                 if (!col) return null;
                 return (
                   <SortableColumn
                     key={col.id}
                     column={col}
-                    cards={(localCardIdsByColumnId[col.id] ?? []).map((id) => cardsById[id]).filter(Boolean)}
+                    cards={(displayCardIdsByColumnId[col.id] ?? []).map((id) => cardsById[id]).filter(Boolean)}
                     isEditingColumn={editingColumnId === col.id}
                     columnTitle={columnTitle}
                     mutationLoading={mutationLoading}

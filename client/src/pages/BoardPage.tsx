@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -127,6 +127,7 @@ export default function BoardPage() {
   const [cardDraft, setCardDraft] = useState({ title: "", description: "", dueDate: "" });
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [originalCardColumnId, setOriginalCardColumnId] = useState<number | null>(null);
+  const [originalCardIndex, setOriginalCardIndex] = useState<number | null>(null);
   // Tracks where the dragged card will land for cross-column placeholder animation
   const [dropTarget, setDropTarget] = useState<{ columnId: number; beforeCardId: number | null } | null>(null);
   // Local copies updated optimistically during drag so SortableContexts stay in sync
@@ -322,19 +323,28 @@ export default function BoardPage() {
       return;
     }
 
-    if (activeDrag.type !== "card") {
-      return;
-    }
-
-    if (!overId.startsWith("card-") && !overId.startsWith("column-") &&
-        !overId.startsWith("col-top-") && !overId.startsWith("col-bottom-")) return;
+    if (activeDrag.type !== "card") return;
 
     const cardId = Number(activeId.replace("card-", ""));
     if (!Number.isFinite(cardId)) return;
 
-    const fromColumnId = Number(
+    const fromColumnId = originalCardColumnId ?? Number(
       Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
     );
+    if (!Number.isFinite(fromColumnId)) return;
+
+    const removeFromSource = (state: Record<number, number[]>) => ({
+      ...state,
+      [fromColumnId]: (state[fromColumnId] ?? []).filter((id) => id !== cardId),
+    });
+
+    const restoreToSourceEnd = (state: Record<number, number[]>) => {
+      const sourceIds = (cardIdsByColumnId[fromColumnId] ?? []).filter((id) => id !== cardId);
+      const nextSourceIds = [...sourceIds];
+      const insertAt = originalCardIndex === null || originalCardIndex > nextSourceIds.length ? nextSourceIds.length : originalCardIndex;
+      nextSourceIds.splice(insertAt, 0, cardId);
+      return { ...state, [fromColumnId]: nextSourceIds };
+    };
 
     if (overId.startsWith("card-")) {
       const overCardId = Number(overId.replace("card-", ""));
@@ -346,58 +356,51 @@ export default function BoardPage() {
       if (!Number.isFinite(overColumnId)) return;
 
       if (fromColumnId === overColumnId) {
-        // Same column: real reorder via dnd-kit, no cross-column placeholder needed
         setDropTarget(null);
         setLocalCardIdsByColumnId((prev) => {
-          const entry = Object.entries(prev).find(([, ids]) => ids.includes(cardId));
-          if (!entry) return prev;
-          const colId = Number(entry[0]);
-          const ids = [...entry[1]];
+          const ids = [...(prev[fromColumnId] ?? [])];
           const oldIndex = ids.indexOf(cardId);
           const newIndex = ids.indexOf(overCardId);
           if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return prev;
-          return { ...prev, [colId]: arrayMove(ids, oldIndex, newIndex) };
+          return { ...prev, [fromColumnId]: arrayMove(ids, oldIndex, newIndex) };
         });
-      } else {
-        // Cross-column: use cursor Y to decide if placeholder goes before or after overCard
-        const overRect = event.over?.rect;
-        const activeRect = event.active.rect.current?.translated;
-        let insertAfter = false;
-        if (overRect && activeRect) {
-          const cursorY = activeRect.top + activeRect.height / 2;
-          const overMidY = overRect.top + overRect.height / 2;
-          insertAfter = cursorY > overMidY;
-        }
-
-        if (insertAfter) {
-          // Find the card after overCard in the target column, place before it
-          const colIds = localCardIdsByColumnId[overColumnId] ?? [];
-          const overIndex = colIds.indexOf(overCardId);
-          const nextCardId = overIndex < colIds.length - 1 ? colIds[overIndex + 1] : null;
-          setDropTarget({ columnId: overColumnId, beforeCardId: nextCardId });
-        } else {
-          setDropTarget({ columnId: overColumnId, beforeCardId: overCardId });
-        }
+        return;
       }
-    } else if (overId.startsWith("col-top-")) {
-      const overColumnId = Number(overId.replace("col-top-", ""));
+
+      const overRect = event.over?.rect;
+      const activeRect = event.active.rect.current?.translated;
+      const insertAfter = !!(
+        overRect && activeRect && activeRect.top + activeRect.height / 2 > overRect.top + overRect.height / 2
+      );
+
+      const targetIds = localCardIdsByColumnId[overColumnId] ?? [];
+      const overIndex = targetIds.indexOf(overCardId);
+      const beforeCardId = insertAfter
+        ? (overIndex < targetIds.length - 1 ? targetIds[overIndex + 1] : null)
+        : overCardId;
+
+      setDropTarget({ columnId: overColumnId, beforeCardId });
+      setLocalCardIdsByColumnId((prev) => removeFromSource(prev));
+      return;
+    }
+
+    if (overId.startsWith("col-top-") || overId.startsWith("col-bottom-")) {
+      const overColumnId = Number(overId.replace(overId.startsWith("col-top-") ? "col-top-" : "col-bottom-", ""));
       if (!Number.isFinite(overColumnId)) return;
       if (overColumnId === fromColumnId) {
         setDropTarget(null);
-      } else {
-        // Insert before the first card
+        return;
+      }
+
+      if (overId.startsWith("col-top-")) {
         const firstCardId = (localCardIdsByColumnId[overColumnId] ?? [])[0] ?? null;
         setDropTarget({ columnId: overColumnId, beforeCardId: firstCardId });
-      }
-    } else if (overId.startsWith("col-bottom-")) {
-      const overColumnId = Number(overId.replace("col-bottom-", ""));
-      if (!Number.isFinite(overColumnId)) return;
-      if (overColumnId === fromColumnId) {
-        setDropTarget(null);
+        setLocalCardIdsByColumnId((prev) => removeFromSource(prev));
       } else {
         setDropTarget({ columnId: overColumnId, beforeCardId: null });
+        setLocalCardIdsByColumnId((prev) => removeFromSource(prev));
       }
-    } 
+    }
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -405,8 +408,10 @@ export default function BoardPage() {
 
     const draggedData = activeDrag;
     const origColumnId = originalCardColumnId;
+    const origCardIndex = originalCardIndex;
     setActiveDrag(null);
     setOriginalCardColumnId(null);
+    setOriginalCardIndex(null);
     setDropTarget(null);
 
     if (!board || !draggedData) {
@@ -567,13 +572,17 @@ export default function BoardPage() {
               if (Number.isFinite(columnId)) data = { type: "column", columnId };
             }
             setActiveDrag(data);
-            if (data?.type === "card") setOriginalCardColumnId(data.columnId);
+            if (data?.type === "card") {
+              setOriginalCardColumnId(data.columnId);
+              setOriginalCardIndex((cardIdsByColumnId[data.columnId] ?? []).indexOf(data.cardId));
+            }
           }}
           onDragOver={(event) => void handleDragOver(event)}
           onDragEnd={(event) => void handleDragEnd(event)}
           onDragCancel={() => {
             setActiveDrag(null);
             setOriginalCardColumnId(null);
+            setOriginalCardIndex(null);
             setDropTarget(null);
             setLocalColumnIds(columnIds);
             setLocalCardIdsByColumnId(cardIdsByColumnId);
@@ -693,14 +702,14 @@ type SortableColumnProps = {
   onDeleteImage: (cardId: number, imageId: number) => void;
 };
 
-function ColumnTopZone({ columnId }: { columnId: number }) {
+function ColumnTopZone({ columnId, hasCards }: { columnId: number; hasCards: boolean }) {
   const { setNodeRef } = useDroppable({ id: `col-top-${columnId}` });
-  return <div ref={setNodeRef} style={{ height: 8 }} />;
+  return <div ref={setNodeRef} style={{ height: hasCards ? 8 : 0 }} />;
 }
 
 function ColumnBottomZone({ columnId }: { columnId: number }) {
   const { setNodeRef } = useDroppable({ id: `col-bottom-${columnId}` });
-  return <div ref={setNodeRef} style={{ minHeight: 24, flex: 1 }} />;
+  return <div ref={setNodeRef} style={{ minHeight: 4, flex: 1 }} />;
 }
 
 function SortableColumn(props: SortableColumnProps) {
@@ -745,40 +754,41 @@ function SortableColumn(props: SortableColumnProps) {
       )}
 
       <div className="card-list">
-        <ColumnTopZone columnId={props.column.id} />
+        <ColumnTopZone columnId={props.column.id} hasCards={props.cards.length > 0} />
         <SortableContext items={props.cards.map((card) => `card-${card.id}`)} strategy={verticalListSortingStrategy}>
-          {props.cards.length === 0 && !props.dropTarget && <div className="card-list-empty">Нет карточек</div>}
-          {props.cards.map((card) => (
+          {props.cards.length === 0 ? (
+            props.dropTarget ? (
+              <div className="card-drop-placeholder" />
+            ) : (
+              <div className="card-list-empty">Нет карточек</div>
+            )
+          ) : (
             <>
-              {props.dropTarget?.beforeCardId === card.id && (
-                <div
-                  key={`placeholder-before-${card.id}`}
-                  className="card-drop-placeholder"
-                />
-              )}
-              <SortableCard
-                key={card.id}
-                card={card}
-                columnId={props.column.id}
-                isEditing={props.editingCardId === card.id}
-                cardDraft={props.cardDraft}
-                mutationLoading={props.mutationLoading}
-                images={props.imagesByCardId[card.id] ?? []}
-                isDragPlaceholder={props.activeDragCardId === card.id}
-                isAnyDragging={props.isAnyDragging}
-                dropTarget={props.dropTarget}
-                onStartEditing={() => props.onStartCardEditing(card)}
-                onCardDraftChange={props.onCardDraftChange}
-                onSubmit={() => props.onSubmitCardEdit()}
-                onCancel={props.onCancelCardEdit}
-                onDelete={() => props.onDeleteCard(card.id)}
-                onUploadImage={(file) => props.onUploadImage(card.id, file)}
-                onDeleteImage={(imageId) => props.onDeleteImage(card.id, imageId)}
-              />
+              {props.cards.map((card) => (
+                <Fragment key={card.id}>
+                  {props.dropTarget?.beforeCardId === card.id && <div className="card-drop-placeholder" />}
+                  <SortableCard
+                    card={card}
+                    columnId={props.column.id}
+                    isEditing={props.editingCardId === card.id}
+                    cardDraft={props.cardDraft}
+                    mutationLoading={props.mutationLoading}
+                    images={props.imagesByCardId[card.id] ?? []}
+                    isDragPlaceholder={props.activeDragCardId === card.id}
+                    isAnyDragging={props.isAnyDragging}
+                    dropTarget={props.dropTarget}
+                    onStartEditing={() => props.onStartCardEditing(card)}
+                    onCardDraftChange={props.onCardDraftChange}
+                    onSubmit={() => props.onSubmitCardEdit()}
+                    onCancel={props.onCancelCardEdit}
+                    onDelete={() => props.onDeleteCard(card.id)}
+                    onUploadImage={(file) => props.onUploadImage(card.id, file)}
+                    onDeleteImage={(imageId) => props.onDeleteImage(card.id, imageId)}
+                  />
+                </Fragment>
+              ))}
+              {props.dropTarget?.beforeCardId === null && <div className="card-drop-placeholder" />}
             </>
-          ))}
-          {props.dropTarget?.beforeCardId === null && (
-            <div className="card-drop-placeholder" />
           )}
         </SortableContext>
         <ColumnBottomZone columnId={props.column.id} />
@@ -848,9 +858,9 @@ function SortableCard(props: SortableCardProps) {
     return <div ref={setNodeRef} style={style} className="card-drop-placeholder" />;
   }
 
-  // Cross-column drag: card is invisible but keeps its space so column height stays stable
+  // Cross-column drag: remove card from source column so only target placeholder is visible
   if (isCrossColumnDrag) {
-    return <div ref={setNodeRef} style={{ ...style, opacity: 0, pointerEvents: "none" }} className="card" />;
+    return <div ref={setNodeRef} style={{ display: "none" }} />;
   }
 
   return (

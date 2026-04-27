@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -134,6 +134,33 @@ export default function BoardPage() {
   const [localColumnIds, setLocalColumnIds] = useState<number[]>([]);
   const [localCardIdsByColumnId, setLocalCardIdsByColumnId] = useState<Record<number, number[]>>({});
 
+  // Confirmation dialogs
+  const [pendingDeleteBoard, setPendingDeleteBoard] = useState(false);
+  const [pendingDeleteColumn, setPendingDeleteColumn] = useState<{ id: number; title: string } | null>(null);
+  const [pendingDeleteCard, setPendingDeleteCard] = useState<{ id: number; title: string } | null>(null);
+
+  // Pan scroll
+  const columnsRowRef = useRef<HTMLDivElement>(null);
+  const panState = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number; } | null>(null);
+
+  useEffect(() => {
+    if (!pendingDeleteBoard && !pendingDeleteColumn && !pendingDeleteCard) return;
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        setPendingDeleteBoard(false);
+        setPendingDeleteColumn(null);
+        setPendingDeleteCard(null);
+      }
+    }
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [pendingDeleteBoard, pendingDeleteColumn, pendingDeleteCard]);
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   useEffect(() => {
@@ -147,14 +174,6 @@ export default function BoardPage() {
   useEffect(() => {
     if (board) setBoardTitle(board.title);
   }, [board]);
-
-  // Keep local drag state in sync with Redux when not dragging
-  // useEffect(() => {
-  //   if (!activeDrag) {
-  //     setLocalColumnIds(columnIds);
-  //     setLocalCardIdsByColumnId(cardIdsByColumnId);
-  //   }
-  // }, [activeDrag, columnIds, cardIdsByColumnId]);
 
   useEffect(() => {
     if (error === "unauthorized") {
@@ -195,6 +214,32 @@ export default function BoardPage() {
       navigate("/boards", { replace: true });
     } catch {
       // error is stored in slice
+    }
+  }
+
+  function handleDeleteColumn(colId: number, title: string) {
+    setPendingDeleteColumn({ id: colId, title });
+  }
+
+  async function confirmDeleteColumn() {
+    if (!pendingDeleteColumn) return;
+    try {
+      await dispatch(deleteColumn(pendingDeleteColumn.id)).unwrap();
+    } finally {
+      setPendingDeleteColumn(null);
+    }
+  }
+
+  function handleDeleteCard(cardId: number, title: string) {
+    setPendingDeleteCard({ id: cardId, title });
+  }
+
+  async function confirmDeleteCard() {
+    if (!pendingDeleteCard) return;
+    try {
+      await dispatch(deleteCard(pendingDeleteCard.id)).unwrap();
+    } finally {
+      setPendingDeleteCard(null);
     }
   }
 
@@ -553,7 +598,7 @@ export default function BoardPage() {
           <span className="app-bar-user">
             {user?.username}{user?.email ? ` · ${user.email}` : ""}
           </span>
-          <button className="btn-danger btn-sm" onClick={handleDeleteBoard} disabled={!board || mutationLoading}>
+          <button className="btn-danger btn-sm" onClick={() => setPendingDeleteBoard(true)} disabled={!board || mutationLoading}>
             Удалить доску
           </button>
           <button className="btn-secondary btn-sm" onClick={onLogout}>Выйти</button>
@@ -603,7 +648,49 @@ export default function BoardPage() {
           }}
         >
           <SortableContext items={displayColumnIds.map((id) => `column-${id}`)} strategy={horizontalListSortingStrategy}>
-            <div className="columns-row">
+            <div
+              className="columns-row"
+              ref={columnsRowRef}
+              onMouseDown={(e) => {
+                const target = e.target as HTMLElement;
+                // Only start pan if clicking on the row background, not on interactive elements
+                if (target.closest("button, input, textarea, a, .card, .column-header")) return;
+                if (e.button !== 0) return;
+                
+                // Начальные координаты и скролл по обеим осям
+                panState.current = { 
+                  startX: e.clientX, 
+                  startY: e.clientY,
+                  scrollLeft: columnsRowRef.current?.scrollLeft ?? 0, 
+                  scrollTop: columnsRowRef.current?.scrollTop ?? 0
+                };
+                
+                e.currentTarget.style.cursor = "grabbing";
+                e.currentTarget.style.userSelect = "none";
+                // Предотвращение выделение текста и стандартный dnd
+                e.preventDefault();
+              }}
+              onMouseMove={(e) => {
+                if (!panState.current || !columnsRowRef.current) return;
+                
+                const dx = e.clientX - panState.current.startX;
+                const dy = e.clientY - panState.current.startY;
+                
+                // Обновляем скролл по обеим осям (инвертируем, чтобы тянуть контент за собой)
+                columnsRowRef.current.scrollLeft = panState.current.scrollLeft - dx;
+                columnsRowRef.current.scrollTop = panState.current.scrollTop - dy;
+              }}
+              onMouseUp={(e) => {
+                panState.current = null;
+                e.currentTarget.style.cursor = "";
+                e.currentTarget.style.userSelect = "";
+              }}
+              onMouseLeave={(e) => {
+                panState.current = null;
+                e.currentTarget.style.cursor = "";
+                e.currentTarget.style.userSelect = "";
+              }}
+            >
               {displayColumnIds.map((colId) => {
                 const col = columnsById[colId];
                 if (!col) return null;
@@ -628,7 +715,7 @@ export default function BoardPage() {
                       setEditingColumnId(null);
                       setColumnTitle("");
                     }}
-                    onDeleteColumn={() => void dispatch(deleteColumn(col.id))}
+                    onDeleteColumn={() => handleDeleteColumn(col.id, col.title)}
                     onNewCardTitleChange={(value) =>
                       setNewCardTitles((current) => ({ ...current, [col.id]: value }))
                     }
@@ -640,7 +727,10 @@ export default function BoardPage() {
                       setEditingCardId(null);
                       setCardDraft({ title: "", description: "", dueDate: "" });
                     }}
-                    onDeleteCard={(cardId) => void dispatch(deleteCard(cardId))}
+                    onDeleteCard={(cardId) => {
+                      const card = cardsById[cardId];
+                      handleDeleteCard(cardId, card?.title ?? "");
+                    }}
                     onHandleEditorKeyDown={handleEditorKeyDown}
                     imagesByCardId={imagesByCardId}
                     onUploadImage={(cardId, file) => void dispatch(uploadCardImage({ cardId, file }))}
@@ -678,6 +768,48 @@ export default function BoardPage() {
           </DragOverlay>
         </DndContext>
       </div>
+
+      {/* Delete board dialog */}
+      {pendingDeleteBoard && (
+        <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteBoard(false); }}>
+          <div className="dialog" role="dialog" aria-modal="true">
+            <h3 className="dialog-title">Удалить доску?</h3>
+            <p className="dialog-text">Доска «{board?.title}» будет удалена вместе со всеми колонками и карточками.</p>
+            <div className="dialog-actions">
+              <button className="btn-secondary btn-sm" onClick={() => setPendingDeleteBoard(false)}>Отмена</button>
+              <button className="btn-danger btn-sm" onClick={() => { setPendingDeleteBoard(false); void handleDeleteBoard(); }} disabled={mutationLoading}>Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete column dialog */}
+      {pendingDeleteColumn && (
+        <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteColumn(null); }}>
+          <div className="dialog" role="dialog" aria-modal="true">
+            <h3 className="dialog-title">Удалить колонку?</h3>
+            <p className="dialog-text">Колонка «{pendingDeleteColumn.title}» будет удалена вместе со всеми карточками.</p>
+            <div className="dialog-actions">
+              <button className="btn-secondary btn-sm" onClick={() => setPendingDeleteColumn(null)}>Отмена</button>
+              <button className="btn-danger btn-sm" onClick={() => void confirmDeleteColumn()} disabled={mutationLoading}>Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete card dialog */}
+      {pendingDeleteCard && (
+        <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteCard(null); }}>
+          <div className="dialog" role="dialog" aria-modal="true">
+            <h3 className="dialog-title">Удалить карточку?</h3>
+            <p className="dialog-text">Карточка «{pendingDeleteCard.title}» будет удалена безвозвратно.</p>
+            <div className="dialog-actions">
+              <button className="btn-secondary btn-sm" onClick={() => setPendingDeleteCard(null)}>Отмена</button>
+              <button className="btn-danger btn-sm" onClick={() => void confirmDeleteCard()} disabled={mutationLoading}>Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

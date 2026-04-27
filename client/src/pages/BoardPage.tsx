@@ -338,13 +338,14 @@ export default function BoardPage() {
       [fromColumnId]: (state[fromColumnId] ?? []).filter((id) => id !== cardId),
     });
 
-    const restoreToSourceEnd = (state: Record<number, number[]>) => {
+    const restoreToSourceBefore = (state: Record<number, number[]>, beforeCardId: number) => {
       const sourceIds = (cardIdsByColumnId[fromColumnId] ?? []).filter((id) => id !== cardId);
+      const insertAt = sourceIds.indexOf(beforeCardId);
       const nextSourceIds = [...sourceIds];
-      const insertAt = originalCardIndex === null || originalCardIndex > nextSourceIds.length ? nextSourceIds.length : originalCardIndex;
-      nextSourceIds.splice(insertAt, 0, cardId);
+      nextSourceIds.splice(insertAt === -1 ? nextSourceIds.length : insertAt, 0, cardId);
       return { ...state, [fromColumnId]: nextSourceIds };
     };
+
 
     if (overId.startsWith("card-")) {
       const overCardId = Number(overId.replace("card-", ""));
@@ -358,7 +359,12 @@ export default function BoardPage() {
       if (fromColumnId === overColumnId) {
         setDropTarget(null);
         setLocalCardIdsByColumnId((prev) => {
-          const ids = [...(prev[fromColumnId] ?? [])];
+          const idsBefore = prev[fromColumnId] ?? [];
+          if (!idsBefore.includes(cardId)) {
+            return restoreToSourceBefore(prev, overCardId);
+          }
+
+          const ids = [...idsBefore];
           const oldIndex = ids.indexOf(cardId);
           const newIndex = ids.indexOf(overCardId);
           if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return prev;
@@ -384,8 +390,13 @@ export default function BoardPage() {
       return;
     }
 
-    if (overId.startsWith("col-top-") || overId.startsWith("col-bottom-")) {
-      const overColumnId = Number(overId.replace(overId.startsWith("col-top-") ? "col-top-" : "col-bottom-", ""));
+    if (overId.startsWith("col-top-") || overId.startsWith("col-bottom-") || overId.startsWith("col-empty-")) {
+      const prefix = overId.startsWith("col-top-")
+        ? "col-top-"
+        : overId.startsWith("col-bottom-")
+          ? "col-bottom-"
+          : "col-empty-";
+      const overColumnId = Number(overId.replace(prefix, ""));
       if (!Number.isFinite(overColumnId)) return;
       if (overColumnId === fromColumnId) {
         setDropTarget(null);
@@ -395,6 +406,9 @@ export default function BoardPage() {
       if (overId.startsWith("col-top-")) {
         const firstCardId = (localCardIdsByColumnId[overColumnId] ?? [])[0] ?? null;
         setDropTarget({ columnId: overColumnId, beforeCardId: firstCardId });
+        setLocalCardIdsByColumnId((prev) => removeFromSource(prev));
+      } else if (overId.startsWith("col-empty-")) {
+        setDropTarget({ columnId: overColumnId, beforeCardId: null });
         setLocalCardIdsByColumnId((prev) => removeFromSource(prev));
       } else {
         setDropTarget({ columnId: overColumnId, beforeCardId: null });
@@ -651,7 +665,7 @@ export default function BoardPage() {
             </div>
           </SortableContext>
 
-          <DragOverlay>
+          <DragOverlay dropAnimation={null}>
             {activeCard ? (
               <div className="card dragging">
                 <span className="card-title">{activeCard.title}</span>
@@ -704,12 +718,17 @@ type SortableColumnProps = {
 
 function ColumnTopZone({ columnId, hasCards }: { columnId: number; hasCards: boolean }) {
   const { setNodeRef } = useDroppable({ id: `col-top-${columnId}` });
-  return <div ref={setNodeRef} style={{ height: hasCards ? 8 : 0 }} />;
+  return <div ref={setNodeRef} style={{ height: hasCards ? 4 : 0 }} />;
 }
 
 function ColumnBottomZone({ columnId }: { columnId: number }) {
   const { setNodeRef } = useDroppable({ id: `col-bottom-${columnId}` });
   return <div ref={setNodeRef} style={{ minHeight: 4, flex: 1 }} />;
+}
+
+function EmptyColumnDropZone({ columnId }: { columnId: number }) {
+  const { setNodeRef } = useDroppable({ id: `col-empty-${columnId}` });
+  return <div ref={setNodeRef} className="card-list-empty">Нет карточек</div>;
 }
 
 function SortableColumn(props: SortableColumnProps) {
@@ -754,13 +773,13 @@ function SortableColumn(props: SortableColumnProps) {
       )}
 
       <div className="card-list">
-        <ColumnTopZone columnId={props.column.id} hasCards={props.cards.length > 0} />
+        {props.cards.length > 0 && <ColumnTopZone columnId={props.column.id} hasCards />}
         <SortableContext items={props.cards.map((card) => `card-${card.id}`)} strategy={verticalListSortingStrategy}>
           {props.cards.length === 0 ? (
             props.dropTarget ? (
               <div className="card-drop-placeholder" />
             ) : (
-              <div className="card-list-empty">Нет карточек</div>
+              <EmptyColumnDropZone columnId={props.column.id} />
             )
           ) : (
             <>
@@ -791,7 +810,7 @@ function SortableColumn(props: SortableColumnProps) {
             </>
           )}
         </SortableContext>
-        <ColumnBottomZone columnId={props.column.id} />
+        {props.cards.length > 0 && <ColumnBottomZone columnId={props.column.id} />}
       </div>
 
       <div className="add-card-form">
@@ -850,7 +869,7 @@ function SortableCard(props: SortableCardProps) {
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
+    transition: isDragging ? undefined : "none",
   };
 
   // Same-column drag: show teal placeholder in place of the card

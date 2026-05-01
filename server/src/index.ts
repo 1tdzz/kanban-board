@@ -52,7 +52,11 @@ function getPrimaryBoardId(userId: number): number {
   return board.id;
 }
 
+// Проверка авторизации через JWT токен
 function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
+  // Извлекаем токен из заголовка Authorization: Bearer ...
+  // Проверяем его через verifyToken
+  // Если всё ок — кладём userId в req.userId
   const h = req.headers.authorization;
   const token = h?.startsWith("Bearer ") ? h.slice(7).trim() : "";
   if (!token) return res.status(401).json({ error: "unauthorized" });
@@ -91,6 +95,7 @@ function getCardForUser(cardId: number, userId: number) {
     .get(cardId, userId) as CardRow | undefined;
 }
 
+// Получаем полную доску со всеми колонками и карточками
 function getBoardPayload(boardId: number, userId: number) {
   const board = getBoardForUser(boardId, userId);
   if (!board) return null;
@@ -310,7 +315,12 @@ app.delete("/columns/:id", authMiddleware, (req: AuthedRequest, res) => {
   res.status(204).send();
 });
 
+// Перемещение карточки — самая сложная эндпоинт на бэкенде
 app.patch("/boards/:boardId/cards/move", authMiddleware, (req: AuthedRequest, res) => {
+  // Проверяем права доступа
+  // Используем транзакцию базы данных
+  // Пересчитываем позиции всех затронутых карточек
+  // Возвращаем обновлённое состояние всей доски
   const boardId = Number(req.params.boardId);
   const cardId = Number(req.body?.cardId);
   const fromColumnId = Number(req.body?.fromColumnId);
@@ -446,6 +456,10 @@ app.get("/cards/:id/images", authMiddleware, (req: AuthedRequest, res) => {
 });
 
 app.post("/cards/:id/images", authMiddleware, (req: AuthedRequest, res) => {
+  // Загрузка картинок:
+  // 1. Проверяем, что это действительно изображение
+  // 2. Сохраняем бинарные данные прямо в SQLite (в поле BLOB)
+  // 3. Возвращаем id новой картинки
   const cardId = Number(req.params.id);
   if (!Number.isFinite(cardId)) return res.status(400).json({ error: "invalid_id" });
 

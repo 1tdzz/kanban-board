@@ -51,6 +51,9 @@ async function readError(r: Response, fallback: string) {
   }
 }
 
+// Нормализация данных с бэкенда
+// Приводим плоский массив колонок и карточек к удобной структуре:
+// columnsById, columnIds, cardsById, cardIdsByColumnId
 function normalize(payload: BoardPayload) {
   const columnsById: Record<number, Column> = {};
   const columnIds = payload.columns
@@ -84,6 +87,7 @@ function clearBoardState(state: KanbanState) {
   state.cardIdsByColumnId = {};
 }
 
+// Применяем полные данные доски после запроса
 function applyBoardPayload(state: KanbanState, payload: BoardPayload) {
   state.board = payload.board;
   const existing = state.boards.find((item) => item.id === payload.board.id);
@@ -313,10 +317,12 @@ const kanbanSlice = createSlice({
   reducers: {},
   extraReducers: (builder) => {
     builder
+      // Загрузка списка досок
       .addCase(fetchBoards.pending, (s) => {
         s.boardsLoading = true;
         s.error = null;
       })
+      // Загрузка одной доски 
       .addCase(fetchBoards.fulfilled, (s, a) => {
         s.boardsLoading = false;
         s.boards = a.payload;
@@ -438,9 +444,10 @@ const kanbanSlice = createSlice({
         s.mutationLoading = true;
         s.error = null;
       })
+      // Перемещение карточки 
       .addCase(moveCard.fulfilled, (s, a) => {
         s.mutationLoading = false;
-        applyBoardPayload(s, a.payload);
+        applyBoardPayload(s, a.payload); // полностью обновляем состояние после успешного перемещения
       })
       .addCase(moveCard.rejected, (s, a) => {
         s.mutationLoading = false;
@@ -507,7 +514,8 @@ const kanbanSlice = createSlice({
           s.imagesByCardId[cardId] = s.imagesByCardId[cardId].filter((img) => img.id !== imageId);
         }
       })
-      .addCase(logout, () => ({ ...initialState }))
+      // Добавление, удаление, переименование 
+      .addCase(logout, () => ({ ...initialState })) // при выходе сбрасываем 
       .addCase(login.fulfilled, () => ({ ...initialState }))
       .addCase(register.fulfilled, () => ({ ...initialState }));
   },

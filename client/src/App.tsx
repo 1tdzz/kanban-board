@@ -9,8 +9,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Страницы авторизации доступны всем */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        {/* Защищённые маршруты — только для авторизованных пользователей */}
         <Route
           path="/boards"
           element={
@@ -27,6 +29,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* По умолчанию и при неизвестном пути — перекидываем на список досок */}
         <Route path="/" element={<Navigate to="/boards" replace />} />
         <Route path="*" element={<Navigate to="/boards" replace />} />
       </Routes>

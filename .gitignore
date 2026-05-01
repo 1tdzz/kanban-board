@@ -11,3 +11,4 @@ server/data/
 server/data/app.db-wal
 server/data/app.db-shm
 *.ini
+client/public

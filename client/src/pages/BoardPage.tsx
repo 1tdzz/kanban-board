@@ -114,9 +114,11 @@ export default function BoardPage() {
   const params = useParams();
   const boardId = Number(params.boardId);
   const user = useAppSelector((s) => s.auth.user);
+  // Данные из Redux
   const { board, boardLoading, mutationLoading, error, columnIds, columnsById, cardsById, cardIdsByColumnId, imagesByCardId } =
     useAppSelector((s) => s.kanban);
 
+  // Локальные состояния для форм и UI
   const [newColumnTitle, setNewColumnTitle] = useState("");
   const [editingBoard, setEditingBoard] = useState(false);
   const [boardTitle, setBoardTitle] = useState("");
@@ -125,16 +127,17 @@ export default function BoardPage() {
   const [newCardTitles, setNewCardTitles] = useState<Record<number, string>>({});
   const [editingCardId, setEditingCardId] = useState<number | null>(null);
   const [cardDraft, setCardDraft] = useState({ title: "", description: "", dueDate: "" });
+  // Переменные для Drag and Drop
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [originalCardColumnId, setOriginalCardColumnId] = useState<number | null>(null);
   const [originalCardIndex, setOriginalCardIndex] = useState<number | null>(null);
-  // Tracks where the dragged card will land for cross-column placeholder animation
+  // Отслеживает, куда попадет перетаскиваемая карточка для анимации placeholder между столбцами
   const [dropTarget, setDropTarget] = useState<{ columnId: number; beforeCardId: number | null } | null>(null);
-  // Local copies updated optimistically during drag so SortableContexts stay in sync
+  // Локальные копии данных во время перетаскивания
   const [localColumnIds, setLocalColumnIds] = useState<number[]>([]);
   const [localCardIdsByColumnId, setLocalCardIdsByColumnId] = useState<Record<number, number[]>>({});
 
-  // Confirmation dialogs
+  // Диалоги подтвержения
   const [pendingDeleteBoard, setPendingDeleteBoard] = useState(false);
   const [pendingDeleteColumn, setPendingDeleteColumn] = useState<{ id: number; title: string } | null>(null);
   const [pendingDeleteCard, setPendingDeleteCard] = useState<{ id: number; title: string } | null>(null);
@@ -163,6 +166,7 @@ export default function BoardPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // Основная загрузка доски
   useEffect(() => {
     if (!Number.isFinite(boardId)) {
       navigate("/boards", { replace: true });
@@ -333,34 +337,10 @@ export default function BoardPage() {
     }
   }
 
-  function getDragData(id: string): DragData | null {
-    if (id.startsWith("card-")) {
-      const cardId = Number(id.replace("card-", ""));
-      if (Number.isFinite(cardId)) {
-        // Find which column the card currently belongs to in local state
-        const columnId = Number(
-          Object.entries(localCardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
-        );
-        if (Number.isFinite(columnId)) {
-          return { type: "card", cardId, columnId };
-        }
-        // Fallback: search Redux state
-        const reduxColumnId = Number(
-          Object.entries(cardIdsByColumnId).find(([, ids]) => ids.includes(cardId))?.[0]
-        );
-        if (Number.isFinite(reduxColumnId)) {
-          return { type: "card", cardId, columnId: reduxColumnId };
-        }
-      }
-    }
-    if (id.startsWith("column-")) {
-      const columnId = Number(id.replace("column-", ""));
-      return Number.isFinite(columnId) ? { type: "column", columnId } : null;
-    }
-    return null;
-  }
-
+  // Главная функция для определения, куда падает карточка во время перетаскивания
   function handleDragOver(event: DragOverEvent) {
+    // Логика определения позиции вставки
+    // Обновляем локальное состояние, чтобы карточка "летела" плавно между колонками
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
     if (!overId || !activeId.startsWith("card-")) {
@@ -462,12 +442,15 @@ export default function BoardPage() {
     }
   }
 
+  // Завершение перетаскивания — отправляем изменения на сервер
   async function handleDragEnd(event: DragEndEvent) {
+    // Если перетаскивали колонку — меняем их порядок
+    // Если перетаскивали карточку — либо внутри колонки, либо между колонками
+    // используем dropTarget, который посчитали в handleDragOver
     const overId = event.over ? String(event.over.id) : null;
 
     const draggedData = activeDrag;
     const origColumnId = originalCardColumnId;
-    const origCardIndex = originalCardIndex;
     setActiveDrag(null);
     setOriginalCardColumnId(null);
     setOriginalCardIndex(null);
@@ -560,9 +543,12 @@ export default function BoardPage() {
   const displayColumnIds = activeDrag ? localColumnIds : columnIds;
   const displayCardIdsByColumnId = activeDrag ? localCardIdsByColumnId : cardIdsByColumnId;
 
+
   return (
     <div className="board-page">
       <header className="app-bar">
+        {/* Заголовок доски с возможностью переименования */}
+        {/* Кнопки: удалить доску, выйти */}
         <div className="app-bar-left">
           <Link className="back-link" to="/boards">← Доски</Link>
           {editingBoard ? (
@@ -612,9 +598,10 @@ export default function BoardPage() {
         <DndContext
           sensors={sensors}
           collisionDetection={pointerWithin}
+          // Срабатывает, когда начинаем тащить карточку или колонку
+          // Запоминаем, откуда тащим, чтобы правильно вернуть данные при отмене
           onDragStart={(event) => {
             const activeId = String(event.active.id);
-            // Sync local state first so getDragData can look up columnId
             setLocalColumnIds(columnIds);
             setLocalCardIdsByColumnId(cardIdsByColumnId);
             let data: DragData | null = null;
@@ -647,13 +634,14 @@ export default function BoardPage() {
             setLocalCardIdsByColumnId(cardIdsByColumnId);
           }}
         >
+          {/* Все колонки в одной горизонтальной sortable-группе */}
           <SortableContext items={displayColumnIds.map((id) => `column-${id}`)} strategy={horizontalListSortingStrategy}>
             <div
               className="columns-row"
               ref={columnsRowRef}
               onMouseDown={(e) => {
                 const target = e.target as HTMLElement;
-                // Only start pan if clicking on the row background, not on interactive elements
+                // Начало pan scroll только при нажатии на фон строки, а не на интерактивные элементы
                 if (target.closest("button, input, textarea, a, .card, .column-header")) return;
                 if (e.button !== 0) return;
                 
@@ -691,6 +679,7 @@ export default function BoardPage() {
                 e.currentTarget.style.userSelect = "";
               }}
             >
+              {/* Рендер всех колонок */}
               {displayColumnIds.map((colId) => {
                 const col = columnsById[colId];
                 if (!col) return null;
@@ -738,7 +727,7 @@ export default function BoardPage() {
                   />
                 );
               })}
-
+              {/* Форма добавления новой колонки */}
               {board && (
                 <div className="add-column-form">
                   <input
@@ -754,7 +743,7 @@ export default function BoardPage() {
               )}
             </div>
           </SortableContext>
-
+          {/* Силуэт перетаскиваемого элемента */}
           <DragOverlay dropAnimation={null}>
             {activeCard ? (
               <div className="card dragging">
@@ -769,7 +758,7 @@ export default function BoardPage() {
         </DndContext>
       </div>
 
-      {/* Delete board dialog */}
+      {/* Диалог удаления доски */}
       {pendingDeleteBoard && (
         <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteBoard(false); }}>
           <div className="dialog" role="dialog" aria-modal="true">
@@ -783,7 +772,7 @@ export default function BoardPage() {
         </div>
       )}
 
-      {/* Delete column dialog */}
+      {/* Диалог удаления колонки */}
       {pendingDeleteColumn && (
         <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteColumn(null); }}>
           <div className="dialog" role="dialog" aria-modal="true">
@@ -797,7 +786,7 @@ export default function BoardPage() {
         </div>
       )}
 
-      {/* Delete card dialog */}
+      {/* Диалог удаления карточки */}
       {pendingDeleteCard && (
         <div className="dialog-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setPendingDeleteCard(null); }}>
           <div className="dialog" role="dialog" aria-modal="true">

@@ -1,21 +1,40 @@
 # Kanban Board (React + Express + SQLite)
 
-Аналог Trello/Notion:
-
+## Technologies used:
 - **frontend**: React + Vite (`/client`)
 - **backend**: Express + SQLite (`/server`)
-- **данные**: SQLite-файл в `server/data/app.db`
+- **data**: SQLite-файл в `server/data/app.db`
 
-## Запуск
 
-Для запуска требуется установленный Node.js, из корня проекта выполнить команды:
+## Installation and launch
+
+To use the application, you need to have an installed Node.js on your device
+
+Download Node.js is available via the link:
+
+`https://nodejs.org/en/download`
+
+1. Clone the repository
+
+`https://github.com/1tdzz/kanban-board.git`
+
+2. From project root run commands:
+
+- Install dependencies
 
 ```bash
 npm install
+```
+
+- Launch the project
+
+```bash
 npm run dev
 ```
 
-- клиент: `http://127.0.0.1:5173`
-- сервер: `http://127.0.0.1:3001`
+3. Open in the browser
 
-- `http://127.0.0.1:3001/health` - статус сервера
+By default:
+
+- client: `http://127.0.0.1:5173`
+- server: `http://127.0.0.1:3001/health`

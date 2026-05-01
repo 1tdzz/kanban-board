@@ -7,7 +7,7 @@ dist/
 *.local
 CLAUDE.md
 .claude/
-server/data/
+server/data
 server/data/app.db-wal
 server/data/app.db-shm
 *.ini
